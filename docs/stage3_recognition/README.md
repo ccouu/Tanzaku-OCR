@@ -1,10 +1,14 @@
 # Stage 3 — active V27 recognizer
 
-Only the V27 implementation is active here. Earlier versions and the V28
+The reusable implementation is V27. V29–V31 experiment scripts and selected
+reports live under `outputs/recognition/`;their architecture is unchanged.
+See the [current experiment summary](stage3_summary.md) and
+[compact handoff](HANDOFF.md) for recent checkpoints and decoding results.
+Earlier versions and the V28
 experiment are preserved under
 [archive/stage3_legacy_20261111](../../archive/stage3_legacy_20261111/README.md).
 
-## Current model
+## V27 reference model
 
 Use [epoch_20.pt](../../outputs/recognition/training/v27_font_full20/epoch_20.pt)
 for the trained V27 font-recognition candidate. `last.pt` has the same model
@@ -67,6 +71,6 @@ this reorganization and must not be rewritten or bypassed to resume it.
 - `utils.py`: checksums, seeding, device checks, FP32 CTC loss and guarded margins.
 - `checkpointing.py`: CPU snapshots and atomic saves.
 
-See the [V27 summary](stage3_summary.md),
+See the [Stage3 summary](stage3_summary.md),
 [original completed run report](font_full20_v27.md), and
 [cleanup manifest](../../archive/stage3_legacy_20261111/manifest.json).
