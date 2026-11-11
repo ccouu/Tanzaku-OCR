@@ -1,0 +1,5 @@
+# Colab provides CUDA-compatible torch and torchvision; retain that matched pair.
+timm==1.0.31
+Pillow>=10,<13
+numpy>=1.26,<3
+pytest>=8,<10

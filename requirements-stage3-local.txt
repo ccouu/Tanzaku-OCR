@@ -1,0 +1,6 @@
+# Install into .venv-recognition, not the global CPU-only Python installation.
+# Official CUDA wheels: --index-url https://download.pytorch.org/whl/cu130
+torch==2.14.1+cu130
+torchvision==0.29.1+cu130
+# Install this model library from PyPI after the matched CUDA wheels.
+timm==1.0.31
