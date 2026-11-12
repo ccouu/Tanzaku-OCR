@@ -1,10 +1,47 @@
 # Stage 3 — implementation and experiment summary
 
-The reusable `src/recognition/` implementation remains V27. Subsequent V29–V31
-continuations and inference diagnostics use that architecture through scripts
-under `outputs/recognition/`. No production checkpoint or decoder was promoted.
-V30 control is the retained reference for recent adaptation experiments; V31
-curated update2000 is the latest trained candidate,subject to retention limits.
+Latest V42completed2000updates:YOLOholdout51.82→45.46%raw,exact24→43/156,
+heldfontlong512mean6.64→1.88%. Exact35%YOLO22400,30%true512long19200,
+34%totalphysical512;2–5%positiveedgepadding/.95–1.05stretch,no added optical
+YOLOnoise. SourceV41EMA1000;147BNbuffersfixed,98affinetensorsupdated.
+Historical10.69→12.53%,shortretentionfails;best.ptretainsV41source,noV42
+promotion. VerticalCERalso+1.12pp;menu gains primarilyhorizontal. KeepV38.
+See [V42 results](v42_yolo35_crop_jitter_plan.md).
+
+V41completed2000updates: correctedinitialization exactparity,all oldweights/
+BNaffine/147buffers unchanged,only57new classifier rows learned. Heldfontnewchar
+recall85.67%/precision90.99%raw,vsV40recall53.51%; all57classeshaveaheldfont
+success. Selectedbest=EMA1000,R52.05%,all17gatesbothprecisionspass. Finalraw/
+EMA failBF16onechar62/200vs60(addedoutputs火→久火,株→抹). YOLOholdoutCER
+unchanged51.82%,only1/36newcharoccurrencesrecognized. No promotion;keepV38.
+See [V41 results](v41_new_rows_only_plan.md).
+
+V40 completed2000updates with57append-only new characters (1779total); all
+received>=532actual encounters and all57classifier rows updated. Heldout-font
+newcharrecall53.51%, but oldsynthetic retention regressed substantially and no
+trained checkpoint passed revisedgates. Promoted model remains V38. Full156
+YOLOholdout51.82→47.97%raw; confidence interval includes no improvement.
+Initialization flaw:constant-12newrows could win over weak oldlogits, emitting
+untrained spaces at update0. Best.pt is initialexpandedV38,nottrainedV40; do not
+deploy it as unchangedV38. See [V40 results](v40_new_characters_plan.md).
+
+Latest diagnostic V39: full forward-only BN-stat recalibration of V38 using
+1336YOLOtrainingcrops catastrophically regressed recognition (YOLOholdout
+41.19→84.28%FP16;40.90→84.43%BF16). Zero weight/affine updates;147BNbuffers
+changed. Candidate rejected, promoted V38 unchanged. See
+`outputs/recognition/pilots/v39_v38_yolo_bn_swap/analysis.md`.
+
+The reusable `src/recognition/` architecture remains V27. **V38 final raw at
+update686 is now the user-promoted recognizer**, at
+`checkpoints/menu_recognizer_v38.pt`; registry `src/recognition/current_model.json`
+and loader `src/recognition/current.py`. Greedy CTC decoding remains beta0.
+
+V38 used four full passes of1,336YOLOtrain crops at25%of21,376presentations,
+with135heldout crops from13disjoint menus. Holdout CER51.53→41.19%; all521exact
+synthetic terms/pass and147fixed BN buffers verified. Both precision gates pass
+under user-authorized `menu_adaptation_v2`: only twochar cap changes13.5→14.0%,
+the other16gates remain unchanged. Adoption is retrospective. V36 and original
+V38best.pt remain preserved. See [V38 run and promotion](v38_yolo25_training.md).
 
 The complete V1–V28 history and retired source/reports are local in the
 [dated archive](../../archive/stage3_legacy_20261111/README.md). Archived dataset

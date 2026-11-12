@@ -1,0 +1,43 @@
+{
+  "version": "V38",
+  "checkpoint": "checkpoints/menu_recognizer_v38.pt",
+  "sha256": "59d04ddcc44ec6f3388cce17c221ae4ced2b6c4fd2a39e1397752492fc10ddad",
+  "source": "outputs/recognition/training/v38_yolo25_fullpasses4/final_raw.pt",
+  "source_sha256": "77fbe7c872df8b732fed3019b2ef00a4d0510d7bb6ebbe9ee4fd57adcb771d86",
+  "update": 686,
+  "arm": "raw",
+  "retention_policy": "menu_adaptation_v2",
+  "normalization": {
+    "mean": [
+      0.485,
+      0.456,
+      0.406
+    ],
+    "std": [
+      0.229,
+      0.224,
+      0.225
+    ]
+  },
+  "inference": {
+    "height": 64,
+    "channels": "RGB",
+    "width_buckets": [
+      128,
+      256,
+      384,
+      512
+    ],
+    "padding": "replicated edge",
+    "valid_lengths": "ceil(valid_width/4)",
+    "blank_logit_penalty": 0,
+    "use_bilstm": true,
+    "orientation_flag": "0 horizontal;1 vertical rotated CCW"
+  },
+  "predecessor": {
+    "version": "V36",
+    "checkpoint": "outputs/recognition/training/v36_yolo_fullpasses2/best.pt",
+    "sha256": "1d7cf9f4956311c011060784a204385eb919e9e7901778a635c0f684b687472a"
+  },
+  "promotion_record": "outputs/recognition/training/v38_yolo25_fullpasses4/promotion.json"
+}

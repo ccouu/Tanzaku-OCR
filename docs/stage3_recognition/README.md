@@ -1,9 +1,47 @@
-# Stage 3 — active V27 recognizer
+# Stage 3 — V38 recognizer, V27 architecture
+
+**Current promoted recognizer: V38 final raw, update686.** Weights:
+`checkpoints/menu_recognizer_v38.pt`. Registry:
+`src/recognition/current_model.json`. Load with
+`from src.recognition.current import load_current_recognizer` and
+`model, checkpoint = load_current_recognizer('cpu')` (or `'cuda:0'`).
+The loader verifies the checkpoint checksum and returns an eval-mode model.
+
+Latest V42 pilot completed:35%geometricallyjitteredYOLO/30%genuine512longlines.
+Menuholdout51.82→45.46%CER andheldfontlong5126.64→1.88%,but historical/short
+retention worsened; no trained checkpoint passed all revised gates. V38 stays
+promoted. See [V42 plan/results](v42_yolo35_crop_jitter_plan.md).
+
+V41 completed: corrected blank-relative initialization passed exact parity;
+only57newrows trained, with50%oldreplay and frozen-teacher consistency. All old
+weights/BNaffine/buffers remained identical. SelectedEMA1000passesbothprecision
+gates; finalrawnewcharheldfontrecall85.67% but noYOLOholdoutCERgain. See
+[V41 plan/results](v41_new_rows_only_plan.md); promoted model remains V38.
+
+V40 expanded-vocabulary training completed from V38:57newcharacters,
+2000updates,actual>=532encounters pernewcharacter. The versioned candidate
+dictionary is `data/processed/recognition/vocab_v40.json`; do not pair that
+1779-character vocabulary with the old1722-character V38 classifier. See
+[V40 plan/results](v40_new_characters_plan.md). V40 was not promoted: synthetic
+retention regressed materially. V38 remains the active model.
+
+Promotion was explicitly authorized after observing V38's YOLO holdout
+improvement51.53%→41.19%CER. Retention policy `menu_adaptation_v2` increases only
+the pooled two-character cap13.5%→14.0%(54→56edits/400); the other16gates and
+both-precision checks remain unchanged. This is a retrospective acceptance
+decision, not a claim of passing the original gates. See
+[V38 run and promotion](v38_yolo25_training.md). All source checkpoints and the
+original V38 `best.pt` (V36 fallback) remain unchanged; use the promoted path
+above, not that historical `best.pt`.
 
 The reusable implementation is V27. V29–V31 experiment scripts and selected
 reports live under `outputs/recognition/`;their architecture is unchanged.
 See the [current experiment summary](stage3_summary.md) and
 [compact handoff](HANDOFF.md) for recent checkpoints and decoding results.
+The [V33 reviewed-label plan](v33_curated50_plan.md) covers the current pilot,
+AGY source audit and gated long training proposal.
+The [V34 full-pass run](v34_fullpasses_plan.md) is the subsequently authorized
+broad-label continuation with minimum521-term coverage.
 Earlier versions and the V28
 experiment are preserved under
 [archive/stage3_legacy_20261111](../../archive/stage3_legacy_20261111/README.md).
@@ -13,8 +51,8 @@ experiment are preserved under
 Use [epoch_20.pt](../../outputs/recognition/training/v27_font_full20/epoch_20.pt)
 for the trained V27 font-recognition candidate. `last.pt` has the same model
 tensors plus recovery state. **best.pt retains the V26 initialization** because
-no later epoch passed all agreed retention gates. No checkpoint was promoted
-as a production recognizer.
+no later epoch passed all agreed retention gates. No V27 checkpoint was promoted
+at that time; V38 above is the current promoted recognizer.
 
 Seen-font CER4.48%, held-out-font CER5.27%; provisional GenAI-menu crop CER96.38%.
 The menu probe has only38 provisional labels and is not an independent

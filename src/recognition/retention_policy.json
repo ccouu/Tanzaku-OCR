@@ -1,0 +1,9 @@
+{
+  "id": "menu_adaptation_v2",
+  "decision": "User authorized V38 promotion, prioritizing significant YOLO-crop gains over marginal synthetic regression.",
+  "adopted_after_observing_v38": true,
+  "required_precisions": ["fp16", "bf16"],
+  "additional_cap_absolute": {"pooled_original_2char": 0.005},
+  "other_caps": "Unchanged from the original 17-gate, precision-matched V30-relative policy.",
+  "interpretation": "Two-character cap 13.5% ->14.0% (54->56 edits/400). This is a new retrospective acceptance policy, not a claim that V38 passed the original policy."
+}
