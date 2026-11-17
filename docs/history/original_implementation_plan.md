@@ -1,3 +1,5 @@
+> Superseded architecture proposal: LoRA/two-channel input/fixed384 and stated mobile latency/operator-fallback targets are not the implemented or measured V60+ recognizer. Current architecture and unresolved mobile validation: [current status](../stage3_recognition/current_status.md). Retain this plan as historical intent, not a training recipe.
+
 > Historical reference; filesystem paths reflect the current layout. Current commands and status: [project overview](../overview.md).
 
 # Master Implementation Plan: Cross-Platform Japanese Restaurant Menu OCR & Instant Culinary Translation

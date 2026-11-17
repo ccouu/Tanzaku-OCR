@@ -1,12 +1,15 @@
 {
-  "version": "V38",
-  "checkpoint": "checkpoints/menu_recognizer_v38.pt",
-  "sha256": "59d04ddcc44ec6f3388cce17c221ae4ced2b6c4fd2a39e1397752492fc10ddad",
-  "source": "outputs/recognition/training/v38_yolo25_fullpasses4/final_raw.pt",
-  "source_sha256": "77fbe7c872df8b732fed3019b2ef00a4d0510d7bb6ebbe9ee4fd57adcb771d86",
-  "update": 686,
+  "version": "V43",
+  "checkpoint": "checkpoints/menu_recognizer_v43.pt",
+  "sha256": "41823c3d508967e50273834fabe2f27a85ea88137b7df3d2539cce735d9986a1",
+  "source": "outputs/recognition/pilots/v43_digits_prices_2000/final_raw.pt",
+  "source_sha256": "ec27f47bf0c68c6cafca08777c23eb4387947e2cf2a3286008412d9099e2f49b",
+  "update": 2000,
   "arm": "raw",
+  "characters": 1779,
+  "blank_id": 0,
   "retention_policy": "menu_adaptation_v2",
+  "retention_override": true,
   "normalization": {
     "mean": [
       0.485,
@@ -19,6 +22,7 @@
       0.225
     ]
   },
+  "label_normalization": "Full-width decimal digits U+FF10..U+FF19 to ASCII; no other compatibility normalization.",
   "inference": {
     "height": 64,
     "channels": "RGB",
@@ -35,9 +39,9 @@
     "orientation_flag": "0 horizontal;1 vertical rotated CCW"
   },
   "predecessor": {
-    "version": "V36",
-    "checkpoint": "outputs/recognition/training/v36_yolo_fullpasses2/best.pt",
-    "sha256": "1d7cf9f4956311c011060784a204385eb919e9e7901778a635c0f684b687472a"
+    "version": "V38",
+    "checkpoint": "checkpoints/menu_recognizer_v38.pt",
+    "sha256": "59d04ddcc44ec6f3388cce17c221ae4ced2b6c4fd2a39e1397752492fc10ddad"
   },
-  "promotion_record": "outputs/recognition/training/v38_yolo25_fullpasses4/promotion.json"
+  "promotion_record": "outputs/recognition/pilots/v43_digits_prices_2000/promotion.json"
 }

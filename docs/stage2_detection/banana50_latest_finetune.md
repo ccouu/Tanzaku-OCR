@@ -1,3 +1,5 @@
+> Scope: this is the recorded dataset/tool/run snapshot, not the latest whole-project status. Recognition training and later menu collections now exist; see [project overview](../overview.md) and [current recognition status](../stage3_recognition/current_status.md). Preserve historical counts, split definitions and provenance.
+
 # Latest-only Banana50 detector fine-tuning
 
 ## Completed result

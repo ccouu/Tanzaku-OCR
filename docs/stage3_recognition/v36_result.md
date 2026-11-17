@@ -1,3 +1,5 @@
+> Historical experiment record. Status, sources, vocabulary, geometry and gates below belong to this version; they are not current deployment instructions. See [current implementation/status](current_status.md) for V75/V76, V77 authorization and production V43. Referenced cached assets may have been retired; do not regenerate or overwrite them merely to follow this record.
+
 # V36 completed: selected raw update7000
 
 Two full epochs completed in about36minutes:8002updates,256000presentations.

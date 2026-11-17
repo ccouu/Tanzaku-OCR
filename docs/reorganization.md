@@ -1,3 +1,5 @@
+> Historical one-time migration record. Paths in frozen manifests remain provenance, not instructions to rerun a migration or overwrite current recognition experiments. See [current project overview](overview.md).
+
 # Workspace reorganization
 
 Code is grouped by capability, data by lifecycle, and guides by stage. `workspace_paths.json` is the explicit old-to-new artifact map. Python path resolution accepts these legacy paths at supported entrypoints. No symlinks are required.
@@ -10,7 +12,7 @@ Historical manifests, provenance snapshots, dataset archives, labels and image b
 
 The inaccessible legacy `data/.pytest-stage1-tmp/` scratch directory remains in place because Windows denied access. All new test scratch is under `.cache/test-runs/`. `.stage2_packages/` is retained for the existing dependency bootstrap.
 
-No datasets were rebuilt, no model was retrained, and no proposals were promoted to reviewed labels. No Git repository was initialized. Existing license notices and the generation ledger remain with the assets.
+No datasets were rebuilt, no model was retrained, and no proposals were promoted to reviewed labels. That migration did not initialize a Git repository; the project was subsequently initialized and has GitHub remote `https://github.com/ccouu/Tanzaku-OCR.git`. Do not infer current commit/push state from this historical migration record. Existing license notices and the generation ledger remain with the assets.
 
 The one-time migration scripts refuse overwrites. `refactor_layout.py` and `update_layout_docs.py` describe the completed source migration and must not be rerun on the reorganized tree.
 

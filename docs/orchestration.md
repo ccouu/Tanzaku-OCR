@@ -1,13 +1,12 @@
-[Phase 1: Research & Spec] ──> agy (Gemini 6 Argon)
-                                    │ (Produces ViT Architecture & Tokenizer Spec)
-                                    ▼
-[Phase 2: Code & Export]   ──> Terra (Codex 6.1 Terra)
-                                    │ (Implements PyTorch, ONNX/CoreML Export)
-                                    ▼
-[Phase 3: Review & Test]   ──> Flash (DeepSeek 4.1 Flash)
-                                    │ (Runs Static Analysis, Shape & Safety Verification)
-                                    ▼
-[Phase 4: Profile & Polish]──> Astra (Codex 6 Astra)
-                                    │ (Calculates FLOPs, Latency & Final Verification)
-                                    ▼
-                             [Deployment Target: CoreML / TFLite Mobile Package]
+# Agent orchestration and background execution
+
+Read the workspace `AGENTS.md` for role/permission rules and [AGY/Colab workflow](agy_colab_training_workflow.md) for current operating detail. The old fixed ViT-design→export topology did not describe the implemented recognition experiments.
+
+- User defines source, budget, dataset constraints and authorization.
+- Sol6/Codex plans, dispatches and reviews evidence.
+- Existing AGY session performs authorized heavy rendering/training/evaluation; do not spawn extra agents unless requested or required by applicable instructions.
+- A hidden local controller manages detached Colab execution, incremental downloads, hashes, recovery and callbacks. No repeatedLLMpolling.
+
+Discover agents with `herdr agent list` / `herdr pane list`; verify identity before dispatch. Pane IDs/modelnames from old reports are examples, not defaults. Sendtasks/callbacks with `herdr agent prompt`; callbacks omit `--wait`. LatestColabskill resolves liveAGYpanes dynamically for repair notifications; coordinator notifications require explicitrouting in the task. Never use arbitrary terminalpaste asagentcommunication or restartHerdr/alterACLs to bypass permissions.
+
+Taskacceptance is not launch. A launchACK requires actualhardware, realdata/e2esmoke and firstoptimizerupdate. Evaluationfailure afterretrieval doesnotmeantrainingfailed; repairlocal evaluation withoutretraining. Preserve source/checkpoints/labels, singlejobownership and fullresume state. Noautomaticpromotion/cleanup/Gitpush beyondauthorization.

@@ -1,17 +1,25 @@
 # YOLO11n-OBB Line Cropping & Token-Efficient VLM Contact-Sheet Pipeline
 
-- **Pipeline Script**: [`scripts/yolo_crop_canvas_pipeline.py`](file:///D:/profolio/japanese_translation/scripts/yolo_crop_canvas_pipeline.py)
+- **Pipeline Script**: [`scripts/yolo_crop_canvas_pipeline.py`](../../scripts/yolo_crop_canvas_pipeline.py)
 - **Default Detector Checkpoint**: `outputs/detection/training/banana130_finetune_v5/yolo11n_menu_obb_banana130_best.pt` (V5).
 - V5 was selected by combined latest-label validation mAP50–95; V3 has higher recall. Neither is proven superior in actual stroke-tightness because most reviewed boxes originated from V3 proposals. Use `--weights` to override; missing weights produce an error rather than silently selecting an older detector.
 - The script prepares canvases/prompts and parses supplied responses. It does not send images to a VLM service automatically.
 
 ---
 
+## Recognition geometry warning (V76 onward)
+
+This document describes the **actual shared exporter**, including its legacy extreme-line height fit. It has not been changed by the V76 training adapter. For corrected recognizer inputs, start from native `crops_display`, apply one CCW90 rotation for nativevertical, proportionally resize toH64, then right-pad only. If width exceeds512, split into<=512 windows with100H64px overlap; do not shrink the whole line or pad its height to fit. Training windows require correct partial labels, while evaluation/inference uses label-independent boundaries and coordinate-based output merging. `predict_long(...,mode='overlap512')` is explicit; its default does not select splitting.
+
+Keep the full-line VLM transcription and parent ID on the native crop. `ctc_labels.txt` is an export, not automatically a compliant training dataset: validate status/OOV/geometry/collection-qualified splits before using it. Do not train full labels on partial windows or count multiple windows as independent source menus. V74/V75 historical scores used precomputed exports; V76's post-completion audit separately measures nativeH64/split inference.
+
+Old collection `data/processed/gemini_banana_mobile_menus_50_crops/` covers001–130. New collection `data/raw/gemini_banana_mobile_menus_train_50/yolo_crops/` contains a separate50menus. Identical basenames do not imply identical images. Labels are provisional VLM transcriptions; menu-generation sidecars are hints, never pixel-verified ground truth.
+
 ## 1. Overview & Token-Saving Architecture
 
 Contact sheets combine numbered crops into fewer image attachments. Actual visual-token costs depend on the VLM, image sizes and layout.
 
-[`scripts/yolo_crop_canvas_pipeline.py`](file:///D:/profolio/japanese_translation/scripts/yolo_crop_canvas_pipeline.py) automates the complete 3-step loop:
+[`scripts/yolo_crop_canvas_pipeline.py`](../../scripts/yolo_crop_canvas_pipeline.py) automates the complete 3-step loop:
 
 1. **`build` (YOLO11n-OBB Cropping + Contact-Sheet Packing)**
    - Runs V5 oriented bounding-box detection at confidence 0.25, NMS IoU 0.7, maximum 300 detections/page.
@@ -101,7 +109,7 @@ python scripts/yolo_crop_canvas_pipeline.py parse `
   --keep-status OK
 ```
 
-To include both `OK` and `TRUNCATED` crops in `ctc_labels.txt`:
+**Diagnostic export only:** the following can retain truncated examples for review. It does not make them valid CTC training samples; current training excludes TRUNCATED unless a correctly aligned visible-text label is independently established:
 
 ```powershell
 python scripts/yolo_crop_canvas_pipeline.py parse `

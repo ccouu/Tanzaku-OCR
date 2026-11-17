@@ -40,9 +40,12 @@ class TemporalBlock(nn.Module):
 
 class ResidualBiLSTM(nn.Module):
     """Packed recurrent residual; zero projection preserves the pretrained path."""
-    def __init__(self):
+    def __init__(self, num_layers=1):
         super().__init__()
-        self.lstm = nn.LSTM(256, 128, num_layers=1, bidirectional=True, batch_first=True)
+        self.num_layers = num_layers
+        self.lstm = nn.LSTM(
+            256, 128, num_layers=num_layers, bidirectional=True, batch_first=True, dropout=0.0
+        )
         self.output = nn.Linear(256, 256)
         nn.init.zeros_(self.output.weight)
         nn.init.zeros_(self.output.bias)
@@ -68,10 +71,57 @@ class ResidualBiLSTM(nn.Module):
         return features + residual.to(features.dtype)
 
 
+ARCH_SPECS = {
+    'v60_ref': {
+        'stage_strides': ((2, 2), (2, 2), (2, 1), (2, 1), (2, 1)),
+        'expected_h': 2,
+        'height_pool': 'conv2d',
+        'bilstm_layers': 1,
+    },
+    'v60_delay_s4_random10': {
+        'stage_strides': ((2, 2), (2, 1), (2, 1), (2, 1), (2, 2)),
+        'expected_h': 2,
+        'height_pool': 'conv2d',
+        'bilstm_layers': 1,
+    },
+    'h4_k41': {
+        'stage_strides': ((2, 2), (2, 1), (2, 1), (2, 1), (1, 2)),
+        'expected_h': 4,
+        'height_pool': 'conv2d_h4',
+        'bilstm_layers': 1,
+    },
+    'v60_h4_k41_random10': {
+        'stage_strides': ((2, 2), (2, 1), (2, 1), (2, 1), (1, 2)),
+        'expected_h': 4,
+        'height_pool': 'conv2d_h4',
+        'bilstm_layers': 1,
+    },
+}
+
+
 class MenuRecognizer(nn.Module):
-    def __init__(self, classes, pretrained=False, temporal=True, orientation=True,temporal_norm='batch', use_bilstm=False):
+    def __init__(
+        self,
+        classes,
+        pretrained=False,
+        temporal=True,
+        orientation=True,
+        temporal_norm='batch',
+        use_bilstm=False,
+        height_pool='mean',
+        stage_strides=((2, 2), (2, 2), (2, 1), (2, 1), (2, 1)),
+        expected_h=2,
+        bilstm_layers=1,
+    ):
         super().__init__()
         import timm
+        if height_pool not in ('mean', 'conv2d', 'conv2d_h4'):
+            raise ValueError(f'Unsupported height_pool={height_pool!r}')
+        if len(stage_strides) != 5:
+            raise ValueError(f'Expected 5 stage_strides, got {stage_strides}')
+        self.height_pool = height_pool
+        self.expected_h = int(expected_h)
+        self.stage_strides = tuple(tuple(s) for s in stage_strides)
         self.encoder = timm.create_model(BACKBONE, pretrained=pretrained, num_classes=0)
         # Enumerate the actual spatial downsampling convolutions, not stage aliases.
         downsamples = [(name, layer) for name, layer in self.encoder.named_modules()
@@ -79,26 +129,40 @@ class MenuRecognizer(nn.Module):
         if len(downsamples) != 5:
             raise ValueError(f'Unexpected backbone downsamplers: {[n for n, _ in downsamples]}')
         self.stride_changes = []
-        for name, layer in downsamples[2:]:
-            layer.stride = (2, 1)
-            self.stride_changes.append(name)
+        for (name, layer), target_stride in zip(downsamples, self.stage_strides):
+            before = tuple(layer.stride)
+            layer.stride = tuple(target_stride)
+            if tuple(target_stride) != before:
+                self.stride_changes.append(name)
         if self.encoder.num_features != 960:
             raise ValueError('Expected 960 spatial feature channels')
         # forward_features excludes these ImageNet classification head modules.
         self.encoder.conv_head = nn.Identity()
         self.encoder.norm_head = nn.Identity()
         self.encoder.act2 = nn.Identity()
-        self.projection = nn.Conv1d(960, 256, 1)
+        if height_pool == 'conv2d':
+            self.projection = nn.Conv2d(960, 256, kernel_size=(2, 1), stride=(2, 1), padding=0, bias=True)
+        elif height_pool == 'conv2d_h4':
+            self.projection = nn.Conv2d(960, 256, kernel_size=(4, 1), stride=(4, 1), padding=0, bias=True)
+        else:
+            self.projection = nn.Conv1d(960, 256, 1)
         self.temporal_norm=temporal_norm
         self.use_orientation = orientation
         self.condition = nn.Sequential(nn.Conv1d(257, 256, 1), nn.ReLU())
         self.temporal = nn.Sequential(TemporalBlock(norm=temporal_norm), TemporalBlock(norm=temporal_norm)) if temporal else nn.Identity()
         self.classifier = nn.Conv1d(256, classes, 1)
-        self.recurrent = ResidualBiLSTM() if use_bilstm else None
+        self.recurrent = ResidualBiLSTM(num_layers=bilstm_layers) if use_bilstm else None
 
     def forward(self, images, orientation, lengths=None):
-        features = self.encoder.forward_features(images).mean(dim=2)
-        features = self.projection(features)
+        feat_4d = self.encoder.forward_features(images)
+        if self.height_pool in ('conv2d', 'conv2d_h4'):
+            if feat_4d.shape[2] != self.expected_h:
+                raise ValueError(
+                    f'Expected encoder height H={self.expected_h} before Conv2d projection, got {tuple(feat_4d.shape)}'
+                )
+            features = self.projection(feat_4d).squeeze(2)
+        else:
+            features = self.projection(feat_4d.mean(dim=2))
         flag = orientation.to(features.dtype).reshape(-1, 1, 1).expand(-1, 1, features.shape[-1])
         if not self.use_orientation:
             flag = torch.zeros_like(flag)

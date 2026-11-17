@@ -1,3 +1,5 @@
+> Historical experiment record. Status, sources, vocabulary, geometry and gates below belong to this version; they are not current deployment instructions. See [current implementation/status](current_status.md) for V75/V76, V77 authorization and production V43. Referenced cached assets may have been retired; do not regenerate or overwrite them merely to follow this record.
+
 # V34 full-pass broad-mixture continuation
 
 User authorized the long run after V33 failed, with the additional requirement

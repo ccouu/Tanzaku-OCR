@@ -1,3 +1,5 @@
+> Historical experiment record. Status, sources, vocabulary, geometry and gates below belong to this version; they are not current deployment instructions. See [current implementation/status](current_status.md) for V75/V76, V77 authorization and production V43. Referenced cached assets may have been retired; do not regenerate or overwrite them merely to follow this record.
+
 # V37 completed: excellent rendered long-lines, no eligible replacement
 
 Verified2000updates/64000presentations:600512batches/19200images(exact30%),

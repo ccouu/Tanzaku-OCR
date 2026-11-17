@@ -1,5 +1,7 @@
 # Stage 1 data preparation
 
+Current recognition datasets are experiment-specific and include two YOLO/VLM crop collections, native vertical rendering and procedural menu backgrounds. The commands below describe the original Stage1 base generator; they are not instructions to overwrite current V75–V77 assets. See [current recognition status](../stage3_recognition/current_status.md).
+
 The synthetic base is `data/processed/synthetic_base_v1/`; shared resources are `data/resources/fonts/`, `data/raw/` and `data/processed/lexicon/`. Explicit custom `--data-root` directories keep the original self-contained layout.
 
 Build commands below change derived data; they are not needed to inspect the existing datasets:

@@ -1,3 +1,15 @@
+# Stage 2 — current detector and historical training evidence
+
+Current cropper default is V5all130, `outputs/detection/training/banana130_finetune_v5/yolo11n_menu_obb_banana130_best.pt`, SHA `0cab3e1205c964621fa7f9d7e9647262895a9009260a174e3bb99174d8d5bf99`. Its frozen snapshot `data/datasets/detection/banana130_v5/training_manifest.json` has130latestreviewedpages,117train/13validationmenus andtwoorientationclasses. Combinedvalidationprecision0.973176/recall0.949834/mAP50 0.988415/mAP50–95 0.929709. Sourcecheckpointunchanged; score is model-selection evidence, not independenttext-tightness/handwritingaccuracy.
+
+V3/V4 later-batch comparisons are retained below their own guides. Reviewed boxes began from detectorproposals, so greater IoU againstthem doesnotprove fewerclippedstrokes. Currentlinecropmerging/duplicatehandling lives in `src/detection/line_crops.py` and [the pipeline guide](../data/yolo_crop_canvas_pipeline.md). Confirmed text-free proposals can be reviewed as background negatives; faint/unreadable text is not automatically blank.
+
+Stage3 is implemented throughV76 withV77authorized. Current [recognitionstatus](../stage3_recognition/current_status.md) replaces the old statement that it has not started. OCRlabels fromVLM andhuman-reviewed detectorboxes are distinct evidence.
+
+## Historical colab_v2 snapshot (2026-11-08)
+
+The following records the earlier1213-page dataset and its then-current gaps. It is not the V5configuration or latestrecognizerstatus.
+
 > Paths updated for the reorganized workspace. Historical artifact contents and provenance paths are retained.
 
 # Stage 2 Summary — Japanese Menu Text Boundary Detection

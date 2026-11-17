@@ -58,3 +58,34 @@ def recalibrate_bn(model,batches,forward):
         for hook in hooks:hook.remove()
         for n,layer in layers.items():layer.momentum=momenta[n]
         for n,layer in model.named_modules():layer.training=modes[n]
+
+
+def freeze_all_bn_eval(model):
+    """Put all BatchNorm layers into eval() mode so running stats stay frozen."""
+    bns = []
+    for name, module in model.named_modules():
+        if isinstance(module, nn.modules.batchnorm._BatchNorm):
+            module.eval()
+            bns.append((name, module))
+    return bns
+
+
+def snapshot_bn_buffers(model):
+    """Return a CPU clone of every BatchNorm running buffer (mean, var, num_batches_tracked)."""
+    snaps = {}
+    for name, module in model.named_modules():
+        if isinstance(module, nn.modules.batchnorm._BatchNorm):
+            for bname, buf in module.named_buffers(recurse=False):
+                snaps[f'{name}.{bname}'] = buf.detach().cpu().clone()
+    return snaps
+
+
+def verify_bn_buffers_identical(model, baseline):
+    """Assert every BatchNorm buffer matches baseline bit-for-bit."""
+    current = snapshot_bn_buffers(model)
+    if set(current.keys()) != set(baseline.keys()):
+        raise RuntimeError('BN buffer key set changed during training')
+    for k, v0 in baseline.items():
+        if not torch.equal(current[k], v0):
+            raise RuntimeError(f'BN buffer mutated: {k}')
+    return len(current)

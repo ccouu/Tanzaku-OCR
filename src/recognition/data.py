@@ -3,6 +3,10 @@ import numpy as np
 import torch
 from PIL import Image
 
+IMAGENET_MEAN = (0.485, 0.456, 0.406)
+IMAGENET_STD = (0.229, 0.224, 0.225)
+
+
 def output_length(width):
     return (int(width) + 3) // 4
 

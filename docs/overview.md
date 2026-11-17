@@ -1,18 +1,14 @@
 # Pipeline overview
 
-Stage 1 prepares resources and data. Stage 2 detects horizontal and vertical text boundaries. Stage 3 will recognize text; Stage 4 will export the validated pipeline for mobile use.
+The project implements Japanese menu OCR with separate data preparation, text detection, recognition and planned mobile export/translation validation. The current recognizer is MobileNetV4 with temporal convolutions and a packed residual BiLSTM; a mobile ViT was an early project direction, not the trained architecture.
 
-Stage 1 delivered 9,000 synthetic recognition lines and 1,000 three-class synthetic detector pages, alongside generated menus, real photographs and separate augmentation runs. Real recognition transcriptions and the hybrid dataset remain pending. [Stage 1 evidence](stage1_data/stage1_summary.md).
+1. **Stage1:** lexical resources, fonts, procedural synthetic data, generated menu collections, real photographs and augmentation. Its original9000-line/1000-page report is a historical snapshot, not the size of current recognition corpora. [Data guide](stage1_data/README.md).
+2. **Stage2:** YOLO11n-OBB horizontal/vertical text boundaries, manual review and refined crop/contact-sheet pipeline. Current cropper default is the V5all130 checkpoint under `outputs/detection/training/banana130_finetune_v5/`, selected on117train/13validationmenus. Detector validation is not OCR transcription accuracy or a blind test. [Detection guide](stage2_detection/README.md).
+3. **Stage3:** implemented recognition training and evaluation through V76, with V77authorized. **Production remains V43raw2000**; V75raw4 is the preferred reviewed YOLO-adaptation research reference, not promoted. V60+research uses learnedConv2dheightcollapse; promotedV43 usesmeanpooling. Both have widthstride4/BiLSTM128perdirection. [Current implementation/status](stage3_recognition/current_status.md).
+4. **Stage4:** mobile conversion, accelerator parity/fallback/latency and end-to-end translation remain unvalidated. Do not present desktop timings or planned budgets as achieved mobile performance.
 
-Stage 2 delivered proposals, explicit review tools, 1,213 reviewed pages, frozen datasets, and a trained YOLO11n-OBB checkpoint. The current training snapshot has 862 train / 351 validation images with source-connected splits and two classes. Validation mAP50 is 0.8427 and mAP50–95 is 0.6521; the planned gates remain unmet. Fresh-photo predictions await inspection. [Stage 2 evidence](stage2_detection/stage2_summary.md).
+Nativeverticalrecognition now has actualtrainingcoverage. LatestgeometryrequiresproportionalH64 andsplittingover512 with100pxoverlap,notheightletterboxing. The sharedYOLOexporterstillcontainslegacyheight-fitbehavior; correctedV76adaptersarenotuniversalintegration. See [crop guide](data/yolo_crop_canvas_pipeline.md).
 
-The three-class synthetic/proposal format includes `price_tag`; the current detector trains `dish_horizontal=0` and `dish_vertical=1`. Existing price conversions and historical annotations are retained. Detector review is independent of verified text transcription.
+TwoYOLOcropcollections retainprovisionalVLMlabels and menu-levelsplits; namespaces prevent samefilenamecollisions. The culinarydatabase is separate from checkpoint-specificvocabularies. Reviewexports do not automatically change labels. The reusabletrainer/Colabrunner refactor is under [request-changes review](../outputs/recognition/review/refactor_v68_v73_review/REVIEW.md), despite modelparity and passinghelpertests.
 
-Stage3's active V27 recognizer combines MobileNetV4, temporal convolutions and
-a packed residual BiLSTM. Its20-epoch full-pass run reached4.48% seen-font and
-5.27% held-out-font validation CER, but failed provisional GenAI-menu retention.
-Earlier experiments are archived. Reviewed real transcriptions, independent
-real-menu evaluation and mobile validation remain pending.
-[Stage 3 results](stage3_recognition/stage3_summary.md).
-
-Use the [workflow](../WORKFLOW.md), [Stage 1 guide](stage1_data/README.md), and [Stage 2 guide](stage2_detection/README.md) for current entrypoints. The [original implementation plan](history/original_implementation_plan.md) is historical context.
+For execution read [AGY/Colab workflow](agy_colab_training_workflow.md). Olderimplementationproposals andtheirunmettargets remain [historical context](history/original_implementation_plan.md), not instructions to reset current models or rerun datasets.

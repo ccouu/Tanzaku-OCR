@@ -38,3 +38,13 @@ venv/
 *.key
 *.p12
 *.pfx
+
+# Publish only the explicitly selected research checkpoint and its model metadata.
+!/checkpoints/
+/checkpoints/*
+!/checkpoints/l2_v01/
+/checkpoints/l2_v01/*
+!/checkpoints/l2_v01/epoch_08.pt
+!/checkpoints/l2_v01/vocab.json
+!/checkpoints/l2_v01/metadata.json
+!/checkpoints/l2_v01/README.md

@@ -1,3 +1,5 @@
+> Historical first detector run. Current cropper default and later datasets: [Stage2 guide](../stage2_detection/README.md). This file is not the active checkpoint/split specification.
+
 > Historical reference; filesystem paths reflect the current layout. Current commands and status: [project overview](../overview.md).
 
 # Reviewed-only YOLO11n-OBB training
