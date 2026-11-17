@@ -48,3 +48,15 @@ venv/
 !/checkpoints/l2_v01/vocab.json
 !/checkpoints/l2_v01/metadata.json
 !/checkpoints/l2_v01/README.md
+!/checkpoints/l2_v02/
+/checkpoints/l2_v02/*
+!/checkpoints/l2_v02/epoch_04.pt
+!/checkpoints/l2_v02/vocab.json
+!/checkpoints/l2_v02/metadata.json
+!/checkpoints/l2_v02/README.md
+!/checkpoints/l2_v03/
+/checkpoints/l2_v03/*
+!/checkpoints/l2_v03/epoch_05.pt
+!/checkpoints/l2_v03/vocab.json
+!/checkpoints/l2_v03/metadata.json
+!/checkpoints/l2_v03/README.md

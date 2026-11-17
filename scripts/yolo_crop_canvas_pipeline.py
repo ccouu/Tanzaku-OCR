@@ -519,7 +519,7 @@ def run_build(
     input_dir: Path,
     output_dir: Path,
     weights: Path = DEFAULT_WEIGHTS,
-    confidence: float = 0.25,
+    confidence: float = 0.35,
     iou_dedup: float = 0.65,
     imgsz: int = 640,
     device: str = "cpu",
@@ -836,7 +836,7 @@ def main() -> None:
     p_build.add_argument("--input", type=Path, required=True, help="Directory of menu photos")
     p_build.add_argument("--output", type=Path, required=True, help="Output directory for crops and canvases")
     p_build.add_argument("--weights", type=Path, default=DEFAULT_WEIGHTS, help="YOLO OBB checkpoint path (default: selected V5 all130 candidate)")
-    p_build.add_argument("--confidence", type=float, default=0.25, help="YOLO confidence threshold")
+    p_build.add_argument("--confidence", type=float, default=0.35, help="YOLO confidence threshold")
     p_build.add_argument("--iou-dedup", type=float, default=0.65, help="Rotated duplicate IoU threshold (AABB only in legacy mode)")
     p_build.add_argument('--legacy-crops',action='store_true',help='Reproduce old AABB suppression and stretched384x64grayscale exports')
     p_build.add_argument('--merge-iom',type=float,default=.20,help='Minimum core intersection/smaller area for aligned fragment merging (.20..1); adjacent-only boxes stay separate')

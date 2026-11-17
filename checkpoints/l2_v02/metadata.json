@@ -1,0 +1,21 @@
+{
+  "lineage": "l2_v02",
+  "epoch": 4,
+  "status": "research_not_promoted",
+  "checkpoint": "epoch_04.pt",
+  "sha256": "ff9c019fe251a2976ad82cb68c97e9c8a0235f095e79db495ea032a6ea30c387",
+  "bytes": 54391732,
+  "states": [
+    "raw",
+    "ema"
+  ],
+  "source_checkpoint": "outputs\\recognition\\experiments\\h4_k41_l2_v02_digits_kanjinum_128k\\downloads\\h4_k41_l2_v02\\epoch_04.pt",
+  "architecture": "h4_k41",
+  "characters": 1779,
+  "blank_id": 0,
+  "width_stride": 4,
+  "encoder_height": 4,
+  "bilstm_layers": 1,
+  "vocab_sha256": "40d532789de881c88edf12f6ce857120159a85f568325036b5ea89378e6e7bc9",
+  "metrics_summary": "dig=0.1101, brk=0.0853, 1ch_c=0.065 (187/200), 1ch_n=0.110, r1=0.061, r2=0.057, r4=0.039, fish_seq_100=0.0143 (95/100)"
+}

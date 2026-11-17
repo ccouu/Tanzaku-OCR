@@ -133,7 +133,7 @@ def main() -> None:
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--weights", type=Path, default=DEFAULT_WEIGHTS)
     parser.add_argument("--device", default="0")
-    parser.add_argument("--confidence", type=float, default=0.25)
+    parser.add_argument("--confidence", type=float, default=0.35)
     parser.add_argument("--iou-dedup", type=float, default=0.65)
     parser.add_argument("--imgsz", type=int, default=1280)
     parser.add_argument("--items-per-canvas", type=int, default=25)

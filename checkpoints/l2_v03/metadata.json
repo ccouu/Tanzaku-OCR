@@ -1,0 +1,21 @@
+{
+  "lineage": "l2_v03",
+  "epoch": 5,
+  "status": "research_not_promoted",
+  "checkpoint": "epoch_05.pt",
+  "sha256": "d12ce539efcaae205f76a45d94c5870594b59d9ac847eea5e55b7d8b2b4c4e3c",
+  "bytes": 54390900,
+  "states": [
+    "raw",
+    "ema"
+  ],
+  "source_checkpoint": "outputs\\recognition\\experiments\\h4_k41_l2_v03_yolo_all240\\downloads\\h4_k41_l2_v03\\epoch_05.pt",
+  "architecture": "h4_k41",
+  "characters": 1779,
+  "blank_id": 0,
+  "width_stride": 4,
+  "encoder_height": 4,
+  "bilstm_layers": 1,
+  "vocab_sha256": "40d532789de881c88edf12f6ce857120159a85f568325036b5ea89378e6e7bc9",
+  "metrics_summary": "val10=0.0724 (raw, 101/129) / 0.0738 (ema, 102/129), test5=0.0972 (48/62), 1ch_c=0.090, 1ch_n=0.185, dig=0.1065, brk=0.0853, hr=0.0497, l512c=0.0392 (ema), l512n=0.0820 (ema), r4=0.060"
+}
