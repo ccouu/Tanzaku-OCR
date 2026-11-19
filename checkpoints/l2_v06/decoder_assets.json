@@ -1,0 +1,23 @@
+{
+  "published_asset_snapshot": "2026-11-19",
+  "files": {
+    "char_lm_4g_hp1010.json.gz": {
+      "sha256": "e9b9a786926598c6aded0b16d78ba21a43b9309371829fad2c0ad993f3605bbd",
+      "bytes": 2008469,
+      "schema_version": 2,
+      "context_transform": "dig_unk_v2",
+      "digit_neutral": true,
+      "reverse": false
+    },
+    "char_lm_4g_hp1010_bwd.json.gz": {
+      "sha256": "2503b2c9b548509c9c454c1e0a03ac855c6e87cfa562a9e31cb3e1f232f9f47b",
+      "bytes": 1946543,
+      "schema_version": 2,
+      "context_transform": "dig_unk_v2",
+      "digit_neutral": true,
+      "reverse": true
+    }
+  },
+  "forward_tables_match_validated_v2_candidate": true,
+  "note": "On-disk HP1010 artifacts are schema-v2 packages; compressed hashes differ from earlier v1.5 validation snapshots. Forward ngram tables equal the validated migration. No LM files were rewritten for this commit. Candidate decoder/inspector patches remain unapplied."
+}

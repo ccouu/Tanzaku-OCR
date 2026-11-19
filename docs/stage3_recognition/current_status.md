@@ -1,5 +1,9 @@
 # Stage 3 current implementation and reviewed status
 
+> **2026-11-19 explicit registry promotion:** current recognizer is **L2_v06 epoch2 EMA (H4)**, verified vocabulary and weights. V43 is preserved for rollback. See [promotion details](l2_v06_promotion.md) and [Char-LM validation](char_lm_validation.md). Decoder/R1 patches remain unapplied review candidates; the original-lineage snapshot below does not override this update.
+
+> **Latest Implementation Plan (2026-11-17):** See [docs/implementation_plan.md](../implementation_plan.md) for the current `L2_v06` (`checkpoints/l2_v06/epoch_02.pt` EMA) promoted checkpoint, HotPepper scraping, LLM morpheme/slot extraction, 4-gram Char-LM CTC beam search, and Morpheme Trie lookup plan.
+
 Documentation snapshot: 2026-11-15, through reviewed V76 results and the authorized V77 pilot. A dispatch receipt is not proof that a trainer launched. Consult the experiment's latest audit/callback for runtime state; this page does not poll background jobs.
 
 **2026-11-17 lineage addition:** former H4 V81 is now **L2 V01**, a separate random-start H4 glyph-first lineage with two completed phases. See [its dataset/training record](l2_v01_dataset_training_summary.md) and [the family map](model_lineage.md). The model-role table below covers the original H2 lineage snapshot; it does not rank later H4/L2 candidates. Registry V43 remains unchanged.
@@ -8,8 +12,8 @@ Documentation snapshot: 2026-11-15, through reviewed V76 results and the authori
 
 | Role | Exact state | Location |
 |---|---|---|
-| User-promoted recognizer | **V43 final raw, update 2000**, 1,779 characters + blank 0 | `checkpoints/menu_recognizer_v43.pt`; registry `src/recognition/current_model.json` |
-| Rollback | V38, 1,722 characters + blank 0 | `checkpoints/menu_recognizer_v38.pt` |
+| User-promoted recognizer | **L2_v06 epoch2 EMA**, H4, 1,779 characters + blank 0 | `checkpoints/l2_v06/epoch_02.pt`; registry `src/recognition/current_model.json` |
+| Rollback | V43 RAW; older V38 retained locally | `checkpoints/menu_recognizer_v43.pt`; previous registry `checkpoints/l2_v06/previous_registry_v43.json` |
 | Preferred reviewed YOLO-adaptation reference | **V75 epoch 4 raw**, retention-eligible, **not promoted** | `outputs/recognition/experiments/v75_v74_new_clean_yolo_fullpasses5_colab/downloads/epoch_04.pt` |
 | Alternative spacing candidate | V76 Attempt 2, epoch 1 raw, eligible under its declared guards, **not a proven improvement over V75** | `outputs/recognition/experiments/v76_v75_dynamic_spacing_fullpasses5_colab/downloads/epoch_01.pt` |
 | Next authorized experiment | V77: two independent matched 500-update arms from V75 raw, standard versus standard/tight synthetic mixture | `outputs/recognition/experiments/v77_v75_tight_gap_matched500_colab/WORK_PLAN.md`; results not reviewed in this snapshot |

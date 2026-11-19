@@ -1,0 +1,22 @@
+{
+  "lineage": "l2_v06",
+  "epoch": 2,
+  "status": "promoted",
+  "preferred_state": "ema",
+  "checkpoint": "epoch_02.pt",
+  "sha256": "d1592d6b29e81476b82235072eb2efd7c84bd4a4ce5bf9f964b6407741948349",
+  "bytes": 54390324,
+  "states": [
+    "raw",
+    "ema"
+  ],
+  "source_checkpoint": "outputs\\recognition\\experiments\\h4_k41_l2_v06_p5pct_pairs_ep04\\downloads\\h4_k41_l2_v06\\epoch_02.pt",
+  "architecture": "h4_k41",
+  "characters": 1779,
+  "blank_id": 0,
+  "width_stride": 4,
+  "encoder_height": 4,
+  "bilstm_layers": 1,
+  "vocab_sha256": "40d532789de881c88edf12f6ce857120159a85f568325036b5ea89378e6e7bc9",
+  "metrics_summary": "val10=0.0571 (ema, 107/129), test5=0.0784 (ema, 50/62), 1ch_c=0.085, 1ch_n=0.155, dig=0.1087, brk=0.0734, hr=0.0511, l512c=0.0368, l512n=0.0708, r1=0.089, r2=0.079, r4=0.064"
+}

@@ -1,5 +1,9 @@
 # Stage 3 compact handoff
 
+> **2026-11-19:** user explicitly promoted **L2_v06 epoch2 EMA** to the registry. Loader now selects H4 architecture and verified vocabulary/state; V43 rollback preserved. [Promotion](l2_v06_promotion.md), [decoder validation and unapplied fixes](char_lm_validation.md). Earlier V43/current-model statements below are historical. No decoder patches or production-server restart were included.
+
+> **Latest Implementation Plan (2026-11-17):** See [docs/implementation_plan.md](../implementation_plan.md) for the active `L2_v06` (`checkpoints/l2_v06/epoch_02.pt` EMA) baseline, HotPepper menu scraping (`src/data/hotpepper_menu_scraper.py`), LLM morpheme/slot extraction, 4-gram Char-LM CTC beam search (`val10=0.0432`, `test5=0.0721`), and Morpheme Trie lookup roadmap.
+
 Updated through V76 review / V77 authorization. [Current status](current_status.md) is the authoritative documentation index; read it before using historical plans.
 
 **2026-11-17 addition:** [L2 V01](l2_v01_dataset_training_summary.md) replaces former H4 V81 as the user-facing name. Current folders are `h4_k41_l2_v01_p1_rand160k` and `h4_k41_l2_v01_p2_v71mix160k`. Phase2 inherits Phase1 epoch2 RAW; both train all weights and BN statistics. All ten epoch hashes verified after rename. Internal `v81` filenames are historical and preserved. Follow the [lineage guide](model_lineage.md) rather than interpreting larger version numbers as descendants. No promotion.

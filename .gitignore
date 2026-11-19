@@ -60,3 +60,16 @@ venv/
 !/checkpoints/l2_v03/vocab.json
 !/checkpoints/l2_v03/metadata.json
 !/checkpoints/l2_v03/README.md
+
+# Explicitly promoted L2_v06 and decoder model artifacts; no training datasets.
+!/checkpoints/l2_v06/
+/checkpoints/l2_v06/*
+!/checkpoints/l2_v06/epoch_02.pt
+!/checkpoints/l2_v06/vocab.json
+!/checkpoints/l2_v06/metadata.json
+!/checkpoints/l2_v06/README.md
+!/checkpoints/l2_v06/promotion.json
+!/checkpoints/l2_v06/previous_registry_v43.json
+!/checkpoints/l2_v06/char_lm_4g_hp1010.json.gz
+!/checkpoints/l2_v06/char_lm_4g_hp1010_bwd.json.gz
+!/checkpoints/l2_v06/decoder_assets.json

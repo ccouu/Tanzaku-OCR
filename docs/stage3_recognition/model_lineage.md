@@ -16,7 +16,7 @@ Snapshot: 2026-11-17. This guide separates **weight ancestry**, **architecture**
 | **ConvH4-Scratch-Visual** | H4 architecture | Separate scratch experiments | H4 V80 phases; not descendants merely because their numbers are larger |
 | **L2 V01 / H4-GlyphFirst** | H4 projection, width stride 4, **one** BiLSTM | **Random Phase1 → Phase2** | Former H4 V81, now renamed `h4_k41_l2_v01_*`; glyph foundation followed by menu integration |
 
-**Recorded production:** `src/recognition/current_model.json` still selects **V43 final RAW**. Research completion or an eligible selection is not a promotion. No family in this guide automatically replaces it.
+**Recorded production (updated 2026-11-19):** `src/recognition/current_model.json` explicitly selects **L2_v06 epoch2 EMA**, H4, under user authorization. V43 remains rollback. L2 V01's subsequent L2_v02→v03→v04→v05→v06 adaptation is summarized in [the implementation handoff](../implementation_plan.md); see the exact [promotion record](l2_v06_promotion.md). This is separate from approval of Char-LM/R1 candidate patches, which remain unapplied.
 
 ## The two most important ancestry maps
 

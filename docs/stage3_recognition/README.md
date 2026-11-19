@@ -2,7 +2,7 @@
 
 Start with [current implementation/status](current_status.md), [compact handoff](HANDOFF.md), and [experiment summary](stage3_summary.md). Historical results below describe their own datasets and policies, not the currently deployed model.
 
-**Promoted:** V43 final raw at `checkpoints/menu_recognizer_v43.pt`, resolved by `src/recognition/current_model.json`. **Research reference:** V75 epoch 4 raw; V76 is an alternative with small uncertain gains, not promoted. **Authorized pilot:** V77 matched 500-update standard/tight-spacing arms from V75; no reviewed result in this snapshot.
+**Promoted (2026-11-19): L2_v06 epoch2 EMA**, H4 architecture, at `checkpoints/l2_v06/epoch_02.pt`, resolved by `src/recognition/current_model.json`. V43 remains rollback. See the [promotion record](l2_v06_promotion.md). Original V75/V76/V77 notes below describe an earlier research lineage, not the current model ranking.
 
 **New independent lineage (2026-11-17): [L2 V01](l2_v01_dataset_training_summary.md), formerly H4 V81.** Both renamed phase folders and all ten epoch hashes are verified. This random-start glyph-first model is separate from the original V75/V76/V77 and H4 V75 families. The preceding research-reference paragraph is the earlier original-lineage snapshot; use the [lineage guide](model_lineage.md) for later branches. No new promotion.
 
@@ -12,6 +12,7 @@ The Strategy refactor's model passed parity, but its trainer/runner remain under
 
 ## Current guides and dataset reports
 
+- [L2_v06 registry promotion](l2_v06_promotion.md) and [Char-LM validation / unapplied candidate fixes](char_lm_validation.md).
 - **[Model family and checkpoint lineage guide](model_lineage.md)** — start here to distinguish original versions, H4 branches, random starts and sibling experiments.
 - [L2 V01 datasets, two-phase training and checkpoint results](l2_v01_dataset_training_summary.md) — current name for former H4 V81.
 - [V53–V59 datasets](v53_v59_dataset_summary.md)

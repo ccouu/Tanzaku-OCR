@@ -1,0 +1,315 @@
+--- a/scripts/recognition/serve_l2_v02_inspector.py
++++ b/scripts/recognition/serve_l2_v02_inspector.py
+@@ -31,7 +31,12 @@
+ )
+ from src.detection.line_crops import process as process_lines, recognition_input
+ from src.recognition.canonical_ctc import fold_parenthesis_logits
+-from src.recognition.char_lm_beam import CharNGramLM, ctc_char_lm_beam_decode
++from src.recognition.char_lm_beam import (
++    DecodeConfig,
++    ImmutableCharNGramLM,
++    IncompatibleLMSchemaError,
++    decode_with_config,
++)
+ from src.recognition.data import IMAGENET_MEAN, IMAGENET_STD, decode, output_length
+ from src.recognition.model import ARCH_SPECS, MenuRecognizer
+ 
+@@ -42,9 +47,13 @@
+ DEFAULT_VOCAB = L2_V06_DIR / "vocab.json"
+ DEFAULT_LM_GZ = L2_V06_DIR / "char_lm_4g_hp1010.json.gz"
+ DEFAULT_BWD_LM_GZ = L2_V06_DIR / "char_lm_4g_hp1010_bwd.json.gz"
++DEFAULT_RAW_LM_GZ = L2_V06_DIR / "char_lm_4g_hp1010_raw_v2.json.gz"
+ DEFAULT_LEXICON = ROOT / "outputs" / "recognition" / "experiments" / "h4_k41_l2_v06_p5pct_pairs_ep04" / "payload" / "menu_lexicon.json"
+ DEFAULT_CLEANED_DIR = ROOT / "data" / "processed" / "lexicon_cleaned_argon"
+ DEFAULT_HP_JSONL = ROOT / "data" / "raw" / "hotpepper_menus" / "hotpepper_menus.jsonl"
++
++VALID_DECODE_MODES = ("greedy", "plain_beam", "beam4g_dn", "beam4g_dn_r1", "bidir4g_dn", "beam4g_raw")
++VALID_ROUTINGS = ("none", "r1_short_greedy", "r2_short_and_numeric_guard")
+ 
+ 
+ def _img_to_data_url(im: Image.Image) -> str:
+@@ -81,29 +90,29 @@
+     valid_t: int,
+     char_to_id: dict[str, int],
+     id_to_char: dict[int, str],
+-    char_lm: CharNGramLM | None = None,
+-    bwd_lm: CharNGramLM | None = None,
+-    alpha_lm: float = 0.30,
+-    decode_mode: str = "beam4g_dn",
++    char_lm: ImmutableCharNGramLM | None = None,
++    bwd_lm: ImmutableCharNGramLM | None = None,
++    decode_config: DecodeConfig | None = None,
+ ) -> dict:
+     logits = model(tensor, ori_t, in_len)
+     logits = fold_parenthesis_logits(logits, char_to_id, drop_aliases=False)
+     seq_logits = logits[:valid_t, 0, :].float()
+     pred_text = decode(logits[:valid_t], char_to_id, in_len)[0]
+     beam_text = pred_text
+-    if char_lm is not None and decode_mode != "greedy" and alpha_lm > 0.0:
++    route_used = "greedy"
++    lm_alternative = None
++    if decode_config is not None and decode_config.mode != "greedy":
+         logp_tv = torch.log_softmax(seq_logits, dim=-1).cpu()
+-        prev_dn = char_lm.digit_neutral
+-        char_lm.digit_neutral = decode_mode != "beam4g_raw"
+-        use_bwd = bwd_lm if decode_mode == "bidir4g_dn" else None
+-        if use_bwd is not None:
+-            use_bwd.digit_neutral = True
+-        try:
+-            beam_text = ctc_char_lm_beam_decode(
+-                logp_tv, id_to_char, char_lm, alpha_lm=alpha_lm, beam_width=5, topk_t=6, bwd_lm=use_bwd
+-            )
+-        finally:
+-            char_lm.digit_neutral = prev_dn
++        dec = decode_with_config(
++            logp_tv,
++            id_to_char,
++            decode_config,
++            lm=char_lm,
++            bwd_lm=bwd_lm if decode_config.mode == "bidir4g_dn" else None,
++        )
++        beam_text = dec["text"]
++        route_used = dec["route_used"]
++        lm_alternative = dec["lm_alternative"]
+ 
+     probs = torch.softmax(seq_logits, dim=-1)
+     top5_vals, top5_ids = torch.topk(seq_logits, k=5, dim=-1)
+@@ -121,11 +130,17 @@
+                 "prob": round(float(top5_probs[t, rank].item()), 4),
+             })
+         timesteps.append({"t": t, "top5": entries})
+-    return {"prediction": pred_text, "beam_prediction": beam_text, "timesteps": timesteps}
++    return {
++        "prediction": pred_text,
++        "beam_prediction": beam_text,
++        "route_used": route_used,
++        "lm_alternative": lm_alternative,
++        "timesteps": timesteps,
++    }
+ 
+ 
+ class InferenceEngine:
+-    """Holds YOLO11n-OBB detector and L2_v04 + L2_v03 MenuRecognizers."""
++    """Holds YOLO11n-OBB detector, L2_v06 + L2_v05 MenuRecognizers, and immutable Char-LMs."""
+ 
+     def __init__(self, yolo_weights: Path, ocr_ckpt: Path, v03_ckpt: Path, vocab_path: Path):
+         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+@@ -149,30 +164,104 @@
+         self.ocr_v04 = _load_recognizer(ocr_ckpt, classes, self.device, state_key="ema")
+         self.ocr_v03 = _load_recognizer(v03_ckpt, classes, self.device, state_key="raw")
+         if DEFAULT_LM_GZ.exists():
+-            self.char_lm = CharNGramLM.load_gz(DEFAULT_LM_GZ)
++            self.char_lm = ImmutableCharNGramLM.load_gz(DEFAULT_LM_GZ, allow_legacy_v1=True)
+         elif (DEFAULT_CLEANED_DIR / "jmdict_food_cleaned.json").exists():
+-            self.char_lm = CharNGramLM.build_from_cleaned_files(DEFAULT_LEXICON, DEFAULT_CLEANED_DIR, self.char_to_id)
++            self.char_lm = ImmutableCharNGramLM.build_from_cleaned_files(
++                DEFAULT_LEXICON, DEFAULT_CLEANED_DIR, self.char_to_id, digit_neutral=True
++            )
+             self.char_lm.save_gz(DEFAULT_LM_GZ)
+         else:
+-            self.char_lm = CharNGramLM.build_from_lexicon_and_hotpepper(DEFAULT_LEXICON, DEFAULT_HP_JSONL, self.char_to_id)
++            self.char_lm = ImmutableCharNGramLM.build_from_lexicon_and_hotpepper(
++                DEFAULT_LEXICON, DEFAULT_HP_JSONL, self.char_to_id, digit_neutral=True
++            )
+             self.char_lm.save_gz(DEFAULT_LM_GZ)
+ 
+         if DEFAULT_BWD_LM_GZ.exists():
+-            self.bwd_lm = CharNGramLM.load_gz(DEFAULT_BWD_LM_GZ)
++            self.bwd_lm = ImmutableCharNGramLM.load_gz(DEFAULT_BWD_LM_GZ, allow_legacy_v1=True)
+         elif (DEFAULT_CLEANED_DIR / "jmdict_food_cleaned.json").exists():
+-            self.bwd_lm = CharNGramLM.build_from_cleaned_files(
+-                DEFAULT_LEXICON, DEFAULT_CLEANED_DIR, self.char_to_id, reverse=True
++            self.bwd_lm = ImmutableCharNGramLM.build_from_cleaned_files(
++                DEFAULT_LEXICON, DEFAULT_CLEANED_DIR, self.char_to_id, reverse=True, digit_neutral=True
+             )
+             self.bwd_lm.save_gz(DEFAULT_BWD_LM_GZ)
+         else:
+             self.bwd_lm = None
++
++        self.raw_lm: ImmutableCharNGramLM | None = (
++            ImmutableCharNGramLM.load_gz(DEFAULT_RAW_LM_GZ, allow_legacy_v1=True) if DEFAULT_RAW_LM_GZ.exists() else None
++        )
+         self.mean = np.array(IMAGENET_MEAN, dtype=np.float32).reshape(1, 1, 3)
+         self.std = np.array(IMAGENET_STD, dtype=np.float32).reshape(1, 1, 3)
+ 
++    def build_decode_config(
++        self,
++        decode_mode: str = "beam4g_dn",
++        alpha_lm: float = 0.30,
++        routing: str | None = None,
++    ) -> tuple[DecodeConfig, ImmutableCharNGramLM | None, ImmutableCharNGramLM | None]:
++        """Validate per-request decode options and return immutable DecodeConfig + compatible LM(s)."""
++        if decode_mode not in VALID_DECODE_MODES:
++            raise ValueError(f"Unsupported decode_mode={decode_mode!r}; expected one of {VALID_DECODE_MODES}")
++        if alpha_lm < 0.0:
++            raise ValueError(f"alpha_lm must be >= 0.0, got {alpha_lm}")
++
++        eff_routing = routing
++        if decode_mode == "beam4g_dn_r1":
++            mode = "beam4g_dn"
++            eff_routing = eff_routing or "r1_short_greedy"
++        else:
++            mode = decode_mode
++            eff_routing = eff_routing or "none"
++
++        if eff_routing not in VALID_ROUTINGS:
++            raise ValueError(f"Unsupported routing={eff_routing!r}; expected one of {VALID_ROUTINGS}")
++
++        if mode == "greedy":
++            return DecodeConfig(mode="greedy", alpha_lm=0.0, routing="none"), None, None
++        if mode == "plain_beam":
++            return DecodeConfig(mode="plain_beam", alpha_lm=0.0, beam_width=5, topk_t=6, routing="none"), None, None
++
++        if mode == "beam4g_raw":
++            target_lm = self.raw_lm if self.raw_lm is not None else self.char_lm
++            target_lm.validate_mode(digit_neutral=False, allow_mismatched_schema=False)
++            cfg = DecodeConfig(
++                mode="beam4g_raw",
++                alpha_lm=alpha_lm,
++                beam_width=5,
++                topk_t=6,
++                digit_neutral=False,
++                routing=eff_routing,
++            )
++            return cfg, target_lm, None
++
++        self.char_lm.validate_mode(digit_neutral=True, allow_mismatched_schema=False)
++        use_bwd = self.bwd_lm if mode == "bidir4g_dn" else None
++        if mode == "bidir4g_dn":
++            if use_bwd is None:
++                raise IncompatibleLMSchemaError("bidir4g_dn requested but no backward Char-LM is loaded.")
++            use_bwd.validate_mode(digit_neutral=True, allow_mismatched_schema=False)
++        cfg = DecodeConfig(
++            mode=mode,
++            alpha_lm=alpha_lm,
++            beam_width=5,
++            topk_t=6,
++            digit_neutral=True,
++            routing=eff_routing,
++        )
++        return cfg, self.char_lm, use_bwd
++
+     @torch.inference_mode()
+     def predict_image(
+-        self, image_bytes: bytes, confidence: float = 0.35, imgsz: int = 640, alpha_lm: float = 0.30, decode_mode: str = "beam4g_dn"
++        self,
++        image_bytes: bytes,
++        confidence: float = 0.35,
++        imgsz: int = 640,
++        alpha_lm: float = 0.30,
++        decode_mode: str = "beam4g_dn",
++        routing: str | None = None,
+     ) -> dict:
++        decode_cfg, active_lm, active_bwd = self.build_decode_config(
++            decode_mode=decode_mode, alpha_lm=alpha_lm, routing=routing
++        )
+         rgb_im = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+         img_w, img_h = rgb_im.size
+ 
+@@ -282,10 +371,9 @@
+                 valid_t,
+                 self.char_to_id,
+                 self.id_to_char,
+-                self.char_lm,
+-                self.bwd_lm,
+-                alpha_lm,
+-                decode_mode,
++                char_lm=active_lm,
++                bwd_lm=active_bwd,
++                decode_config=decode_cfg,
+             )
+             res_v03 = _infer_model(self.ocr_v03, tensor, ori_t, in_len, valid_t, self.char_to_id, self.id_to_char)
+ 
+@@ -302,6 +390,8 @@
+                 "valid_width": valid_width,
+                 "valid_T": valid_t,
+                 "prediction": res_v04["prediction"],
++                "route_used": res_v04["route_used"],
++                "lm_alternative": res_v04["lm_alternative"],
+                 "timesteps": res_v04["timesteps"],
+                 "v04": res_v04,
+                 "v03": res_v03,
+@@ -314,6 +404,9 @@
+             "image_size": [img_w, img_h],
+             "yolo_ms": round(yolo_ms, 1),
+             "ocr_ms": round(ocr_ms, 1),
++            "decode_mode": decode_cfg.mode,
++            "routing": decode_cfg.routing,
++            "alpha_lm": decode_cfg.alpha_lm,
+             "num_crops": len(crops_out),
+             "annotated_url": _img_to_data_url(annotated),
+             "crops": crops_out,
+@@ -386,8 +479,10 @@
+     <label>Decoder
+       <select id="decoderSelect" style="background:#0b1220;color:#e2e8f0;border:1px solid #334155;border-radius:6px;padding:6px 8px">
+         <option value="beam4g_dn" selected>4g Char-LM Beam (DigitNeutral, HP1010)</option>
++        <option value="beam4g_dn_r1">4g Char-LM Beam + R1 Short Guard (&lt;=2ch-&gt;Greedy)</option>
+         <option value="bidir4g_dn">Bidirectional 4g Beam (DigitNeutral, HP1010)</option>
+-        <option value="beam4g_raw">4g Char-LM Beam (Digit-Biased, HP1010)</option>
++        <option value="plain_beam">Plain CTC Beam (alpha=0, No LM)</option>
++        <option value="beam4g_raw">4g Char-LM Beam (Digit-Biased; requires raw_unk_v2 LM)</option>
+         <option value="greedy">Greedy (No LM)</option>
+       </select>
+     </label>
+@@ -440,11 +535,11 @@
+       }),
+     });
+     const data = await resp.json();
+-    if (!resp.ok) throw new Error(data.error || 'Request failed');
++    if (!resp.ok) throw new Error((data.error_type ? `${data.error_type}: ` : '') + (data.error || 'Request failed'));
+     annotatedImg.src = data.annotated_url;
+     previewWrap.style.display = 'block';
+     timingEl.style.display = 'inline-block';
+-    timingEl.textContent = `${data.num_crops} crops | YOLO: ${data.yolo_ms}ms | OCR: ${data.ocr_ms}ms`;
++    timingEl.textContent = `${data.num_crops} crops | mode=${data.decode_mode} (${data.routing}) | YOLO: ${data.yolo_ms}ms | OCR: ${data.ocr_ms}ms`;
+     statusEl.textContent = 'Done';
+ 
+     function renderTimesteps(timesteps, otherTimesteps) {
+@@ -470,7 +565,7 @@
+     for (const c of data.crops) {
+       const card = document.createElement('div');
+       card.className = 'crop-card';
+-      const v04 = c.v04 || { prediction: c.prediction, beam_prediction: c.prediction, timesteps: c.timesteps };
++      const v04 = c.v04 || { prediction: c.prediction, beam_prediction: c.prediction, route_used: c.route_used || 'greedy', lm_alternative: c.lm_alternative || null, timesteps: c.timesteps };
+       const v03 = c.v03 || { prediction: '', timesteps: [] };
+       const beamPred = v04.beam_prediction || v04.prediction;
+       const lmChanged = beamPred !== v04.prediction;
+@@ -484,6 +579,7 @@
+           <span class="badge ori-${c.orientation}">${c.orientation === 'V' ? 'Vertical (V)' : 'Horizontal (H)'}</span>
+           <span class="badge">${esc(c.yolo_label)} (${c.confidence})</span>
+           <span class="badge">w=${c.valid_width}px | T=${c.valid_T}</span>
++          <span class="badge">route=${esc(v04.route_used || 'greedy')}</span>
+           ${lmChanged ? '<span class="model-tag tag-v04">LM FIXED</span>' : ''}
+           ${predDiff ? '<span class="model-tag tag-diff">PRED DIFF</span>' : '<span class="badge">MATCH</span>'}
+         </div>
+@@ -495,6 +591,7 @@
+           <div class="model-hdr">
+             <span class="model-tag tag-v04">L2_v06 (${esc(decoderSelect.options[decoderSelect.selectedIndex].text)})</span>
+             <span class="pred-text">${esc(beamPred || '(empty)')}</span>
++            ${v04.lm_alternative ? `<span class="badge">LM alt: ${esc(v04.lm_alternative)}</span>` : ''}
+           </div>
+           <div class="model-hdr">
+             <span class="model-tag tag-v04">L2_v06 Greedy</span>
+@@ -553,10 +650,20 @@
+                 conf = float(payload.get("confidence", 0.35))
+                 alpha_lm = float(payload.get("alpha_lm", 0.30))
+                 decode_mode = str(payload.get("decode_mode", "beam4g_dn"))
+-                out = engine.predict_image(img_bytes, confidence=conf, alpha_lm=alpha_lm, decode_mode=decode_mode)
++                routing = payload.get("routing")
++                out = engine.predict_image(
++                    img_bytes,
++                    confidence=conf,
++                    alpha_lm=alpha_lm,
++                    decode_mode=decode_mode,
++                    routing=str(routing) if routing is not None else None,
++                )
+                 self._send(200, json.dumps(out, ensure_ascii=False).encode("utf-8"), "application/json; charset=utf-8")
++            except (IncompatibleLMSchemaError, ValueError, KeyError) as exc:
++                err = json.dumps({"error": str(exc), "error_type": type(exc).__name__}, ensure_ascii=False).encode("utf-8")
++                self._send(400, err, "application/json; charset=utf-8")
+             except Exception as exc:
+-                err = json.dumps({"error": str(exc)}).encode("utf-8")
++                err = json.dumps({"error": str(exc), "error_type": type(exc).__name__}, ensure_ascii=False).encode("utf-8")
+                 self._send(500, err, "application/json; charset=utf-8")
+ 
+     return Handler

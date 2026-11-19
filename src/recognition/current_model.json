@@ -1,15 +1,15 @@
 {
-  "version": "V43",
-  "checkpoint": "checkpoints/menu_recognizer_v43.pt",
-  "sha256": "41823c3d508967e50273834fabe2f27a85ea88137b7df3d2539cce735d9986a1",
-  "source": "outputs/recognition/pilots/v43_digits_prices_2000/final_raw.pt",
-  "source_sha256": "ec27f47bf0c68c6cafca08777c23eb4387947e2cf2a3286008412d9099e2f49b",
-  "update": 2000,
-  "arm": "raw",
+  "version": "L2_v06",
+  "checkpoint": "checkpoints/l2_v06/epoch_02.pt",
+  "sha256": "d1592d6b29e81476b82235072eb2efd7c84bd4a4ce5bf9f964b6407741948349",
+  "state_key": "ema",
+  "arm": "ema",
+  "epoch": 2,
+  "architecture": "h4_k41",
+  "vocabulary": "checkpoints/l2_v06/vocab.json",
+  "vocab_sha256": "40d532789de881c88edf12f6ce857120159a85f568325036b5ea89378e6e7bc9",
   "characters": 1779,
   "blank_id": 0,
-  "retention_policy": "menu_adaptation_v2",
-  "retention_override": true,
   "normalization": {
     "mean": [
       0.485,
@@ -22,7 +22,7 @@
       0.225
     ]
   },
-  "label_normalization": "Full-width decimal digits U+FF10..U+FF19 to ASCII; no other compatibility normalization.",
+  "label_normalization": "Full-width decimal digits to ASCII; pool ASCII/full-width parentheses probability mass before canonical CTC decoding.",
   "inference": {
     "height": 64,
     "channels": "RGB",
@@ -36,12 +36,37 @@
     "valid_lengths": "ceil(valid_width/4)",
     "blank_logit_penalty": 0,
     "use_bilstm": true,
-    "orientation_flag": "0 horizontal;1 vertical rotated CCW"
+    "orientation_flag": "0 horizontal;1 vertical rotated CCW",
+    "width_stride": 4,
+    "encoder_height": 4,
+    "bilstm_layers": 1,
+    "decoder": "canonical_greedy",
+    "char_lm_candidate_applied": false
+  },
+  "metrics": {
+    "precision": "FP32",
+    "decoder": "canonical_greedy",
+    "val10": {
+      "crops": 129,
+      "menus": 10,
+      "cer": 0.057103,
+      "exact": 107
+    },
+    "test5": {
+      "crops": 62,
+      "menus": 5,
+      "cer": 0.07837,
+      "exact": 50,
+      "reused_development_set": true
+    }
   },
   "predecessor": {
-    "version": "V38",
-    "checkpoint": "checkpoints/menu_recognizer_v38.pt",
-    "sha256": "59d04ddcc44ec6f3388cce17c221ae4ced2b6c4fd2a39e1397752492fc10ddad"
+    "version": "V43",
+    "checkpoint": "checkpoints/menu_recognizer_v43.pt",
+    "sha256": "41823c3d508967e50273834fabe2f27a85ea88137b7df3d2539cce735d9986a1",
+    "architecture": "mean",
+    "state_key": "model",
+    "registry_backup": "checkpoints/l2_v06/previous_registry_v43.json"
   },
-  "promotion_record": "outputs/recognition/pilots/v43_digits_prices_2000/promotion.json"
+  "promotion_record": "checkpoints/l2_v06/promotion.json"
 }

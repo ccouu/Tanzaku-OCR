@@ -31,12 +31,20 @@ from scripts.yolo_crop_canvas_pipeline import (
 )
 from src.detection.line_crops import process as process_lines, recognition_input
 from src.recognition.canonical_ctc import fold_parenthesis_logits
+from src.recognition.char_lm_beam import CharNGramLM, ctc_char_lm_beam_decode
 from src.recognition.data import IMAGENET_MEAN, IMAGENET_STD, decode, output_length
 from src.recognition.model import ARCH_SPECS, MenuRecognizer
 
-L2_V03_EXP = ROOT / "outputs" / "recognition" / "experiments" / "h4_k41_l2_v03_yolo_all240"
-DEFAULT_OCR_CKPT = L2_V03_EXP / "downloads" / "h4_k41_l2_v03" / "epoch_05.pt"
-DEFAULT_VOCAB = L2_V03_EXP / "payload" / "vocab.json"
+L2_V06_DIR = ROOT / "checkpoints" / "l2_v06"
+L2_V05_DIR = ROOT / "checkpoints" / "l2_v05"
+DEFAULT_OCR_CKPT = L2_V06_DIR / "epoch_02.pt"
+DEFAULT_V03_CKPT = L2_V05_DIR / "epoch_10.pt"
+DEFAULT_VOCAB = L2_V06_DIR / "vocab.json"
+DEFAULT_LM_GZ = L2_V06_DIR / "char_lm_4g_hp1010.json.gz"
+DEFAULT_BWD_LM_GZ = L2_V06_DIR / "char_lm_4g_hp1010_bwd.json.gz"
+DEFAULT_LEXICON = ROOT / "outputs" / "recognition" / "experiments" / "h4_k41_l2_v06_p5pct_pairs_ep04" / "payload" / "menu_lexicon.json"
+DEFAULT_CLEANED_DIR = ROOT / "data" / "processed" / "lexicon_cleaned_argon"
+DEFAULT_HP_JSONL = ROOT / "data" / "raw" / "hotpepper_menus" / "hotpepper_menus.jsonl"
 
 
 def _img_to_data_url(im: Image.Image) -> str:
@@ -46,10 +54,80 @@ def _img_to_data_url(im: Image.Image) -> str:
     return f"data:image/png;base64,{b64}"
 
 
-class InferenceEngine:
-    """Holds YOLO11n-OBB detector and l2_v02_ep04_raw MenuRecognizer."""
+def _load_recognizer(ckpt_path: Path, classes: int, device: torch.device, state_key: str = "raw") -> MenuRecognizer:
+    spec = ARCH_SPECS["h4_k41"]
+    ck = torch.load(ckpt_path, map_location="cpu", weights_only=False)
+    model = MenuRecognizer(
+        classes=classes,
+        pretrained=False,
+        temporal=True,
+        orientation=True,
+        temporal_norm="batch",
+        use_bilstm=True,
+        height_pool=spec["height_pool"],
+        stage_strides=spec["stage_strides"],
+        expected_h=spec["expected_h"],
+        bilstm_layers=spec["bilstm_layers"],
+    ).eval()
+    model.load_state_dict(ck[state_key], strict=True)
+    return model.to(device)
 
-    def __init__(self, yolo_weights: Path, ocr_ckpt: Path, vocab_path: Path):
+
+def _infer_model(
+    model: MenuRecognizer,
+    tensor: torch.Tensor,
+    ori_t: torch.Tensor,
+    in_len: torch.Tensor,
+    valid_t: int,
+    char_to_id: dict[str, int],
+    id_to_char: dict[int, str],
+    char_lm: CharNGramLM | None = None,
+    bwd_lm: CharNGramLM | None = None,
+    alpha_lm: float = 0.30,
+    decode_mode: str = "beam4g_dn",
+) -> dict:
+    logits = model(tensor, ori_t, in_len)
+    logits = fold_parenthesis_logits(logits, char_to_id, drop_aliases=False)
+    seq_logits = logits[:valid_t, 0, :].float()
+    pred_text = decode(logits[:valid_t], char_to_id, in_len)[0]
+    beam_text = pred_text
+    if char_lm is not None and decode_mode != "greedy" and alpha_lm > 0.0:
+        logp_tv = torch.log_softmax(seq_logits, dim=-1).cpu()
+        prev_dn = char_lm.digit_neutral
+        char_lm.digit_neutral = decode_mode != "beam4g_raw"
+        use_bwd = bwd_lm if decode_mode == "bidir4g_dn" else None
+        if use_bwd is not None:
+            use_bwd.digit_neutral = True
+        try:
+            beam_text = ctc_char_lm_beam_decode(
+                logp_tv, id_to_char, char_lm, alpha_lm=alpha_lm, beam_width=5, topk_t=6, bwd_lm=use_bwd
+            )
+        finally:
+            char_lm.digit_neutral = prev_dn
+
+    probs = torch.softmax(seq_logits, dim=-1)
+    top5_vals, top5_ids = torch.topk(seq_logits, k=5, dim=-1)
+    top5_probs = torch.gather(probs, dim=-1, index=top5_ids)
+
+    timesteps = []
+    for t in range(valid_t):
+        entries = []
+        for rank in range(5):
+            tid = int(top5_ids[t, rank].item())
+            entries.append({
+                "id": tid,
+                "token": id_to_char.get(tid, f"#{tid}"),
+                "logit": round(float(top5_vals[t, rank].item()), 3),
+                "prob": round(float(top5_probs[t, rank].item()), 4),
+            })
+        timesteps.append({"t": t, "top5": entries})
+    return {"prediction": pred_text, "beam_prediction": beam_text, "timesteps": timesteps}
+
+
+class InferenceEngine:
+    """Holds YOLO11n-OBB detector and L2_v04 + L2_v03 MenuRecognizers."""
+
+    def __init__(self, yolo_weights: Path, ocr_ckpt: Path, v03_ckpt: Path, vocab_path: Path):
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
         os.environ.setdefault("YOLO_CONFIG_DIR", str(RUNTIME_ROOT))
@@ -68,27 +146,33 @@ class InferenceEngine:
         self.id_to_char[0] = "<blank>"
         classes = len(vocab["characters"]) + 1
 
-        spec = ARCH_SPECS["h4_k41"]
-        ck = torch.load(ocr_ckpt, map_location="cpu", weights_only=False)
-        self.ocr = MenuRecognizer(
-            classes=classes,
-            pretrained=False,
-            temporal=True,
-            orientation=True,
-            temporal_norm="batch",
-            use_bilstm=True,
-            height_pool=spec["height_pool"],
-            stage_strides=spec["stage_strides"],
-            expected_h=spec["expected_h"],
-            bilstm_layers=spec["bilstm_layers"],
-        ).eval()
-        self.ocr.load_state_dict(ck["raw"], strict=True)
-        self.ocr.to(self.device)
+        self.ocr_v04 = _load_recognizer(ocr_ckpt, classes, self.device, state_key="ema")
+        self.ocr_v03 = _load_recognizer(v03_ckpt, classes, self.device, state_key="raw")
+        if DEFAULT_LM_GZ.exists():
+            self.char_lm = CharNGramLM.load_gz(DEFAULT_LM_GZ)
+        elif (DEFAULT_CLEANED_DIR / "jmdict_food_cleaned.json").exists():
+            self.char_lm = CharNGramLM.build_from_cleaned_files(DEFAULT_LEXICON, DEFAULT_CLEANED_DIR, self.char_to_id)
+            self.char_lm.save_gz(DEFAULT_LM_GZ)
+        else:
+            self.char_lm = CharNGramLM.build_from_lexicon_and_hotpepper(DEFAULT_LEXICON, DEFAULT_HP_JSONL, self.char_to_id)
+            self.char_lm.save_gz(DEFAULT_LM_GZ)
+
+        if DEFAULT_BWD_LM_GZ.exists():
+            self.bwd_lm = CharNGramLM.load_gz(DEFAULT_BWD_LM_GZ)
+        elif (DEFAULT_CLEANED_DIR / "jmdict_food_cleaned.json").exists():
+            self.bwd_lm = CharNGramLM.build_from_cleaned_files(
+                DEFAULT_LEXICON, DEFAULT_CLEANED_DIR, self.char_to_id, reverse=True
+            )
+            self.bwd_lm.save_gz(DEFAULT_BWD_LM_GZ)
+        else:
+            self.bwd_lm = None
         self.mean = np.array(IMAGENET_MEAN, dtype=np.float32).reshape(1, 1, 3)
         self.std = np.array(IMAGENET_STD, dtype=np.float32).reshape(1, 1, 3)
 
     @torch.inference_mode()
-    def predict_image(self, image_bytes: bytes, confidence: float = 0.35, imgsz: int = 640) -> dict:
+    def predict_image(
+        self, image_bytes: bytes, confidence: float = 0.35, imgsz: int = 640, alpha_lm: float = 0.30, decode_mode: str = "beam4g_dn"
+    ) -> dict:
         rgb_im = Image.open(io.BytesIO(image_bytes)).convert("RGB")
         img_w, img_h = rgb_im.size
 
@@ -190,27 +274,20 @@ class InferenceEngine:
             ori_t = torch.tensor([ori_flag], dtype=torch.float32, device=self.device)
             in_len = torch.tensor([valid_t], dtype=torch.long)
 
-            logits = self.ocr(tensor, ori_t, in_len)
-            logits = fold_parenthesis_logits(logits, self.char_to_id, drop_aliases=False)
-            seq_logits = logits[:valid_t, 0, :].float()
-            pred_text = decode(logits[:valid_t], self.char_to_id, in_len)[0]
-
-            probs = torch.softmax(seq_logits, dim=-1)
-            top5_vals, top5_ids = torch.topk(seq_logits, k=5, dim=-1)
-            top5_probs = torch.gather(probs, dim=-1, index=top5_ids)
-
-            timesteps = []
-            for t in range(valid_t):
-                entries = []
-                for rank in range(5):
-                    tid = int(top5_ids[t, rank].item())
-                    entries.append({
-                        "id": tid,
-                        "token": self.id_to_char.get(tid, f"#{tid}"),
-                        "logit": round(float(top5_vals[t, rank].item()), 3),
-                        "prob": round(float(top5_probs[t, rank].item()), 4),
-                    })
-                timesteps.append({"t": t, "top5": entries})
+            res_v04 = _infer_model(
+                self.ocr_v04,
+                tensor,
+                ori_t,
+                in_len,
+                valid_t,
+                self.char_to_id,
+                self.id_to_char,
+                self.char_lm,
+                self.bwd_lm,
+                alpha_lm,
+                decode_mode,
+            )
+            res_v03 = _infer_model(self.ocr_v03, tensor, ori_t, in_len, valid_t, self.char_to_id, self.id_to_char)
 
             color = "#38bdf8" if det["is_vertical"] else "#34d399"
             poly_pts = [(float(x), float(y)) for x, y in padded_quad]
@@ -224,10 +301,12 @@ class InferenceEngine:
                 "confidence": round(float(det["confidence"]), 3),
                 "valid_width": valid_width,
                 "valid_T": valid_t,
-                "prediction": pred_text,
+                "prediction": res_v04["prediction"],
+                "timesteps": res_v04["timesteps"],
+                "v04": res_v04,
+                "v03": res_v03,
                 "display_crop_url": _img_to_data_url(display_crop_im),
                 "ctc_crop_url": _img_to_data_url(ctc_crop_im),
-                "timesteps": timesteps,
             })
 
         ocr_ms = (time.perf_counter() - t_ocr0) * 1000.0
@@ -246,7 +325,7 @@ HTML_PAGE = r"""<!doctype html>
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Menu YOLO + L2_v03 Inspector</title>
+<title>Menu YOLO + L2_v06 vs L2_v05 Inspector</title>
 <style>
   :root {
     --bg: #0f172a; --panel: #1e293b; --panel2: #0b1220; --border: #334155;
@@ -277,6 +356,14 @@ HTML_PAGE = r"""<!doctype html>
   .ts-scroll { display: flex; gap: 8px; overflow-x: auto; padding: 6px 2px 10px; }
   .ts-col { min-width: 124px; background: var(--panel2); border: 1px solid var(--border); border-radius: 8px; padding: 7px; flex-shrink: 0; }
   .ts-col.nonblank { border-color: var(--amber); }
+  .ts-col.diff { box-shadow: 0 0 0 1px #f43f5e; border-color: #f43f5e; }
+  .model-block { display: grid; gap: 6px; border-top: 1px dashed var(--border); padding-top: 8px; }
+  .model-hdr { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+  .model-tag { font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 6px; }
+  .tag-v04 { background: rgba(52, 211, 153, 0.15); color: var(--green); border: 1px solid var(--green); }
+  .tag-v03 { background: rgba(56, 189, 248, 0.15); color: var(--accent); border: 1px solid var(--accent); }
+  .tag-diff { background: rgba(244, 63, 94, 0.15); color: #fda4af; border: 1px solid #f43f5e; }
+  .pred-v03 { font-size: 20px; font-weight: 700; color: var(--accent); letter-spacing: 0.03em; }
   .ts-hdr { font-size: 11px; font-weight: 700; color: var(--muted); margin-bottom: 6px; display: flex; justify-content: space-between; }
   .tok-row { display: grid; grid-template-columns: 28px 1fr auto; gap: 4px; align-items: center; font-size: 12px; padding: 2px 0; }
   .tok-sym { font-weight: 700; text-align: center; background: #1e293b; border-radius: 4px; padding: 1px 3px; }
@@ -287,15 +374,24 @@ HTML_PAGE = r"""<!doctype html>
 </head>
 <body>
 <header>
-  <h1>Menu YOLO11n-OBB + L2_v03 (ep05_raw) Inspector</h1>
+  <h1>Menu YOLO11n-OBB + L2_v06 (ep02_ema) vs L2_v05 (ep10_raw) Inspector</h1>
   <span class="badge">YOLO V5 OBB + line_crops</span>
-  <span class="badge">h4_k41 l2_v03 epoch_05.pt (raw)</span>
+  <span class="badge">h4_k41 l2_v06 epoch_02.pt (ema) vs l2_v05 epoch_10.pt (raw)</span>
   <span id="status" class="badge">Ready</span>
 </header>
 <main>
   <div class="controls">
     <input id="fileInput" type="file" accept="image/*" />
     <label>Conf <input id="confInput" type="number" min="0.05" max="0.95" step="0.05" value="0.35" style="width:64px"></label>
+    <label>Decoder
+      <select id="decoderSelect" style="background:#0b1220;color:#e2e8f0;border:1px solid #334155;border-radius:6px;padding:6px 8px">
+        <option value="beam4g_dn" selected>4g Char-LM Beam (DigitNeutral, HP1010)</option>
+        <option value="bidir4g_dn">Bidirectional 4g Beam (DigitNeutral, HP1010)</option>
+        <option value="beam4g_raw">4g Char-LM Beam (Digit-Biased, HP1010)</option>
+        <option value="greedy">Greedy (No LM)</option>
+      </select>
+    </label>
+    <label>LM α <input id="alphaInput" type="number" min="0" max="1.0" step="0.05" value="0.30" style="width:64px"></label>
     <button id="runBtn">Run YOLO + OCR</button>
     <span id="timing" class="badge" style="display:none"></span>
   </div>
@@ -307,6 +403,8 @@ HTML_PAGE = r"""<!doctype html>
 <script>
 const fileInput = document.getElementById('fileInput');
 const confInput = document.getElementById('confInput');
+const decoderSelect = document.getElementById('decoderSelect');
+const alphaInput = document.getElementById('alphaInput');
 const runBtn = document.getElementById('runBtn');
 const statusEl = document.getElementById('status');
 const timingEl = document.getElementById('timing');
@@ -322,7 +420,7 @@ runBtn.addEventListener('click', async () => {
   const f = fileInput.files[0];
   if (!f) { alert('Please select an image first.'); return; }
   runBtn.disabled = true;
-  statusEl.textContent = 'Running YOLO + L2_v02...';
+  statusEl.textContent = 'Running YOLO + L2_v06 + L2_v05...';
   cropsEl.innerHTML = '';
   try {
     const b64 = await new Promise((res, rej) => {
@@ -334,7 +432,12 @@ runBtn.addEventListener('click', async () => {
     const resp = await fetch('/api/predict', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({ image_b64: b64, confidence: parseFloat(confInput.value || '0.35') }),
+      body: JSON.stringify({
+        image_b64: b64,
+        confidence: parseFloat(confInput.value || '0.35'),
+        alpha_lm: parseFloat(alphaInput.value || '0.30'),
+        decode_mode: decoderSelect.value,
+      }),
     });
     const data = await resp.json();
     if (!resp.ok) throw new Error(data.error || 'Request failed');
@@ -344,12 +447,13 @@ runBtn.addEventListener('click', async () => {
     timingEl.textContent = `${data.num_crops} crops | YOLO: ${data.yolo_ms}ms | OCR: ${data.ocr_ms}ms`;
     statusEl.textContent = 'Done';
 
-    for (const c of data.crops) {
-      const card = document.createElement('div');
-      card.className = 'crop-card';
-      const tsHtml = c.timesteps.map(ts => {
+    function renderTimesteps(timesteps, otherTimesteps) {
+      return timesteps.map((ts, idx) => {
         const top1 = ts.top5[0];
+        const otherTop1 = otherTimesteps && otherTimesteps[idx] ? otherTimesteps[idx].top5[0] : null;
+        const isDiff = otherTop1 && otherTop1.id !== top1.id;
         const nb = top1.id !== 0 ? 'nonblank' : '';
+        const diffCls = isDiff ? 'diff' : '';
         const rows = ts.top5.map(e => {
           const isBlank = e.id === 0;
           const lbl = isBlank ? 'blk' : esc(e.token);
@@ -359,8 +463,20 @@ runBtn.addEventListener('click', async () => {
             <span class="tok-prob">${(e.prob * 100).toFixed(1)}%</span>
           </div>`;
         }).join('');
-        return `<div class="ts-col ${nb}"><div class="ts-hdr"><span>t=${ts.t}</span><span>${top1.id === 0 ? 'blk' : esc(top1.token)}</span></div>${rows}</div>`;
+        return `<div class="ts-col ${nb} ${diffCls}"><div class="ts-hdr"><span>t=${ts.t}</span><span>${top1.id === 0 ? 'blk' : esc(top1.token)}</span></div>${rows}</div>`;
       }).join('');
+    }
+
+    for (const c of data.crops) {
+      const card = document.createElement('div');
+      card.className = 'crop-card';
+      const v04 = c.v04 || { prediction: c.prediction, beam_prediction: c.prediction, timesteps: c.timesteps };
+      const v03 = c.v03 || { prediction: '', timesteps: [] };
+      const beamPred = v04.beam_prediction || v04.prediction;
+      const lmChanged = beamPred !== v04.prediction;
+      const predDiff = v04.prediction !== v03.prediction;
+      const tsHtmlV04 = renderTimesteps(v04.timesteps, v03.timesteps);
+      const tsHtmlV03 = renderTimesteps(v03.timesteps, v04.timesteps);
 
       card.innerHTML = `
         <div class="crop-head">
@@ -368,13 +484,31 @@ runBtn.addEventListener('click', async () => {
           <span class="badge ori-${c.orientation}">${c.orientation === 'V' ? 'Vertical (V)' : 'Horizontal (H)'}</span>
           <span class="badge">${esc(c.yolo_label)} (${c.confidence})</span>
           <span class="badge">w=${c.valid_width}px | T=${c.valid_T}</span>
-          <span class="pred-text">${esc(c.prediction || '(empty)')}</span>
+          ${lmChanged ? '<span class="model-tag tag-v04">LM FIXED</span>' : ''}
+          ${predDiff ? '<span class="model-tag tag-diff">PRED DIFF</span>' : '<span class="badge">MATCH</span>'}
         </div>
         <div class="crop-imgs">
           <figure><figcaption>Rectified Crop</figcaption><img src="${c.display_crop_url}" /></figure>
           <figure><figcaption>CTC Input (H=64)</figcaption><img src="${c.ctc_crop_url}" /></figure>
         </div>
-        <div class="ts-scroll">${tsHtml}</div>
+        <div class="model-block">
+          <div class="model-hdr">
+            <span class="model-tag tag-v04">L2_v06 (${esc(decoderSelect.options[decoderSelect.selectedIndex].text)})</span>
+            <span class="pred-text">${esc(beamPred || '(empty)')}</span>
+          </div>
+          <div class="model-hdr">
+            <span class="model-tag tag-v04">L2_v06 Greedy</span>
+            <span class="pred-text" style="font-size:16px;opacity:0.85">${esc(v04.prediction || '(empty)')}</span>
+          </div>
+          <div class="ts-scroll">${tsHtmlV04}</div>
+        </div>
+        <div class="model-block">
+          <div class="model-hdr">
+            <span class="model-tag tag-v03">L2_v05 (ep10_raw)</span>
+            <span class="pred-v03">${esc(v03.prediction || '(empty)')}</span>
+          </div>
+          <div class="ts-scroll">${tsHtmlV03}</div>
+        </div>
       `;
       cropsEl.appendChild(card);
     }
@@ -417,7 +551,9 @@ def make_handler(engine: InferenceEngine):
                 payload = json.loads(self.rfile.read(length).decode("utf-8"))
                 img_bytes = base64.b64decode(payload["image_b64"])
                 conf = float(payload.get("confidence", 0.35))
-                out = engine.predict_image(img_bytes, confidence=conf)
+                alpha_lm = float(payload.get("alpha_lm", 0.30))
+                decode_mode = str(payload.get("decode_mode", "beam4g_dn"))
+                out = engine.predict_image(img_bytes, confidence=conf, alpha_lm=alpha_lm, decode_mode=decode_mode)
                 self._send(200, json.dumps(out, ensure_ascii=False).encode("utf-8"), "application/json; charset=utf-8")
             except Exception as exc:
                 err = json.dumps({"error": str(exc)}).encode("utf-8")
@@ -432,10 +568,11 @@ def main():
     p.add_argument("--port", type=int, default=8765)
     p.add_argument("--yolo-weights", type=Path, default=DEFAULT_WEIGHTS)
     p.add_argument("--ocr-ckpt", type=Path, default=DEFAULT_OCR_CKPT)
+    p.add_argument("--v03-ckpt", type=Path, default=DEFAULT_V03_CKPT)
     p.add_argument("--vocab", type=Path, default=DEFAULT_VOCAB)
     args = p.parse_args()
 
-    engine = InferenceEngine(args.yolo_weights, args.ocr_ckpt, args.vocab)
+    engine = InferenceEngine(args.yolo_weights, args.ocr_ckpt, args.v03_ckpt, args.vocab)
     srv = ThreadingHTTPServer((args.host, args.port), make_handler(engine))
     print(f"SERVE_READY http://{args.host}:{args.port}/ (device={engine.device})", flush=True)
     srv.serve_forever()

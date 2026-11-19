@@ -1,0 +1,13 @@
+{
+  "date": "2026-11-19",
+  "authorization": "User explicitly requested: Promote L2_v06 to registry",
+  "version": "L2_v06",
+  "preferred_state": "ema",
+  "checkpoint_sha256": "d1592d6b29e81476b82235072eb2efd7c84bd4a4ce5bf9f964b6407741948349",
+  "vocabulary_sha256": "40d532789de881c88edf12f6ce857120159a85f568325036b5ea89378e6e7bc9",
+  "previous_registry_sha256": "bdc3ebd90c0c3dcda49bad08fa75b3eed3efa3fae89e136175c5ecf9202b0cb3",
+  "previous_model": "V43",
+  "decoder_policy": "No char-LM candidate or registry decoder policy applied; canonical greedy baseline retained",
+  "source_weights_modified": false,
+  "independent_blind_evaluation_available": false
+}

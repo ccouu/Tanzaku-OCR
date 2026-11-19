@@ -1,0 +1,47 @@
+{
+  "version": "V43",
+  "checkpoint": "checkpoints/menu_recognizer_v43.pt",
+  "sha256": "41823c3d508967e50273834fabe2f27a85ea88137b7df3d2539cce735d9986a1",
+  "source": "outputs/recognition/pilots/v43_digits_prices_2000/final_raw.pt",
+  "source_sha256": "ec27f47bf0c68c6cafca08777c23eb4387947e2cf2a3286008412d9099e2f49b",
+  "update": 2000,
+  "arm": "raw",
+  "characters": 1779,
+  "blank_id": 0,
+  "retention_policy": "menu_adaptation_v2",
+  "retention_override": true,
+  "normalization": {
+    "mean": [
+      0.485,
+      0.456,
+      0.406
+    ],
+    "std": [
+      0.229,
+      0.224,
+      0.225
+    ]
+  },
+  "label_normalization": "Full-width decimal digits U+FF10..U+FF19 to ASCII; no other compatibility normalization.",
+  "inference": {
+    "height": 64,
+    "channels": "RGB",
+    "width_buckets": [
+      128,
+      256,
+      384,
+      512
+    ],
+    "padding": "replicated edge",
+    "valid_lengths": "ceil(valid_width/4)",
+    "blank_logit_penalty": 0,
+    "use_bilstm": true,
+    "orientation_flag": "0 horizontal;1 vertical rotated CCW"
+  },
+  "predecessor": {
+    "version": "V38",
+    "checkpoint": "checkpoints/menu_recognizer_v38.pt",
+    "sha256": "59d04ddcc44ec6f3388cce17c221ae4ced2b6c4fd2a39e1397752492fc10ddad"
+  },
+  "promotion_record": "outputs/recognition/pilots/v43_digits_prices_2000/promotion.json"
+}
