@@ -7,6 +7,11 @@ import math
 import numpy as np
 from PIL import Image
 
+MINOR_OVERLAP_POLICY_VERSION = "minor_overlap_v1_strict_lt10pct"
+MINOR_OVERLAP_MAX_AREA_FRAC = 0.10
+MINOR_OVERLAP_MAX_PERP_FRAC = 0.10
+MINOR_OVERLAP_MAX_ANGLE_DEG = 8.0
+
 
 def cross(a,b):return float(a[0]*b[1]-a[1]*b[0])
 def signed_area(q):return .5*sum(cross(a,b) for a,b in zip(q,np.roll(q,-1,axis=0)))
@@ -35,6 +40,213 @@ def intersection(a,b):
 def overlap(a,b):
     inter=area(intersection(a,b));aa=area(a);bb=area(b)
     return dict(intersection=inter,iou=inter/max(1e-9,aa+bb-inter),iom=inter/max(1e-9,min(aa,bb)))
+
+
+def classify_core_overlap(
+    a,
+    b,
+    *,
+    max_area_frac=MINOR_OVERLAP_MAX_AREA_FRAC,
+    max_perp_frac=MINOR_OVERLAP_MAX_PERP_FRAC,
+    max_angle_deg=MINOR_OVERLAP_MAX_ANGLE_DEG,
+):
+    """Classify an oriented text-core intersection pair under strict <10% area & perpendicular intrusion.
+
+    Returns explicit area fractions, perpendicular intrusion fractions, reading/normal axes,
+    denominators, severity ('clear' | 'minor_allowed' | 'major_review'), and allowance booleans.
+    """
+    poly = intersection(a["core"], b["core"])
+    inter_area = area(poly)
+    aa = area(a["core"])
+    bb = area(b["core"])
+    ha = float(a.get("height", 0.0))
+    hb = float(b.get("height", 0.0))
+    ua = np.asarray(a["u"], dtype=float)
+    va = np.asarray(a["v"], dtype=float)
+    ub = np.asarray(b["u"], dtype=float)
+    vb = np.asarray(b["v"], dtype=float)
+
+    base_ov = dict(
+        policy_version=MINOR_OVERLAP_POLICY_VERSION,
+        intersection=float(inter_area) if math.isfinite(inter_area) else float("nan"),
+        iou=float(inter_area / max(1e-9, aa + bb - inter_area)) if (math.isfinite(inter_area) and aa > 0 and bb > 0) else 0.0,
+        iom=float(inter_area / max(1e-9, min(aa, bb))) if (math.isfinite(inter_area) and aa > 0 and bb > 0) else 0.0,
+        core_area_a=float(aa),
+        core_area_b=float(bb),
+        thickness_a=ha,
+        thickness_b=hb,
+        reading_axis_a=ua.tolist(),
+        reading_axis_b=ub.tolist(),
+        perp_axis_a=va.tolist(),
+        perp_axis_b=vb.tolist(),
+    )
+
+    finite_geom = (
+        math.isfinite(inter_area)
+        and math.isfinite(aa) and aa > 1e-9
+        and math.isfinite(bb) and bb > 1e-9
+        and math.isfinite(ha) and ha > 1e-9
+        and math.isfinite(hb) and hb > 1e-9
+        and np.all(np.isfinite(ua)) and np.all(np.isfinite(va))
+        and np.all(np.isfinite(ub)) and np.all(np.isfinite(vb))
+        and np.linalg.norm(ua) > 1e-9 and np.linalg.norm(ub) > 1e-9
+    )
+
+    if not finite_geom:
+        return dict(
+            **base_ov,
+            area_frac_a=float("nan"),
+            area_frac_b=float("nan"),
+            perp_extent_a=float("nan"),
+            perp_extent_b=float("nan"),
+            perp_frac_a=float("nan"),
+            perp_frac_b=float("nan"),
+            angle_deg=float("nan"),
+            severity="major_review",
+            minor_allowed=False,
+            review_required=True,
+            legacy_review_required=True,
+            reason="degenerate_or_nonfinite_geometry",
+        )
+
+    if len(poly) < 3 or inter_area <= 1e-9:
+        return dict(
+            **base_ov,
+            area_frac_a=0.0,
+            area_frac_b=0.0,
+            perp_extent_a=0.0,
+            perp_extent_b=0.0,
+            perp_frac_a=0.0,
+            perp_frac_b=0.0,
+            angle_deg=math.degrees(math.acos(min(1.0, abs(float(ua @ ub))))),
+            severity="clear",
+            minor_allowed=True,
+            review_required=False,
+            legacy_review_required=False,
+            reason="no_core_intersection",
+        )
+
+    if not np.all(np.isfinite(poly)):
+        return dict(
+            **base_ov,
+            area_frac_a=float("nan"),
+            area_frac_b=float("nan"),
+            perp_extent_a=float("nan"),
+            perp_extent_b=float("nan"),
+            perp_frac_a=float("nan"),
+            perp_frac_b=float("nan"),
+            angle_deg=float("nan"),
+            severity="major_review",
+            minor_allowed=False,
+            review_required=True,
+            legacy_review_required=True,
+            reason="nonfinite_intersection_polygon",
+        )
+
+    area_frac_a = float(inter_area / aa)
+    area_frac_b = float(inter_area / bb)
+    perp_extent_a = float(np.ptp(poly @ va))
+    perp_extent_b = float(np.ptp(poly @ vb))
+    perp_frac_a = float(perp_extent_a / ha)
+    perp_frac_b = float(perp_extent_b / hb)
+    angle_deg = math.degrees(math.acos(min(1.0, abs(float(ua @ ub)))))
+
+    is_minor = (
+        math.isfinite(area_frac_a) and area_frac_a < max_area_frac
+        and math.isfinite(area_frac_b) and area_frac_b < max_area_frac
+        and math.isfinite(perp_frac_a) and perp_frac_a < max_perp_frac
+        and math.isfinite(perp_frac_b) and perp_frac_b < max_perp_frac
+        and math.isfinite(angle_deg) and angle_deg <= max_angle_deg
+    )
+
+    if is_minor:
+        reason = "minor_overlap_allowed_strict_lt10pct"
+    elif angle_deg > max_angle_deg:
+        reason = "incompatible_reading_axes"
+    elif area_frac_a >= max_area_frac or area_frac_b >= max_area_frac:
+        reason = "core_area_fraction_ge_threshold"
+    else:
+        reason = "perpendicular_intrusion_ge_threshold"
+
+    return dict(
+        **base_ov,
+        area_frac_a=area_frac_a,
+        area_frac_b=area_frac_b,
+        perp_extent_a=perp_extent_a,
+        perp_extent_b=perp_extent_b,
+        perp_frac_a=perp_frac_a,
+        perp_frac_b=perp_frac_b,
+        angle_deg=angle_deg,
+        severity="minor_allowed" if is_minor else "major_review",
+        minor_allowed=bool(is_minor),
+        review_required=not bool(is_minor),
+        legacy_review_required=True,
+        reason=reason,
+    )
+
+
+def classify_boxes_core_overlaps(
+    boxes,
+    *,
+    iom_trigger=0.02,
+    max_area_frac=MINOR_OVERLAP_MAX_AREA_FRAC,
+    max_perp_frac=MINOR_OVERLAP_MAX_PERP_FRAC,
+    max_angle_deg=MINOR_OVERLAP_MAX_ANGLE_DEG,
+):
+    """Aggregate pairwise core-overlap classifications across a list of oriented boxes."""
+    conflicts = []
+    per_crop = [
+        dict(
+            overlap_severity="clear",
+            minor_overlap_allowed=False,
+            review_required=False,
+            legacy_review_required=False,
+            overlap_conflict_count=0,
+            minor_conflict_count=0,
+            major_conflict_count=0,
+            overlap_source_ids=set(),
+            minor_overlap_policy_version=MINOR_OVERLAP_POLICY_VERSION,
+        )
+        for _ in boxes
+    ]
+
+    for i, a in enumerate(boxes):
+        for j in range(i + 1, len(boxes)):
+            b = boxes[j]
+            m = overlap(a["core"], b["core"])
+            if m["iom"] <= iom_trigger:
+                continue
+            cls = classify_core_overlap(
+                a, b, max_area_frac=max_area_frac, max_perp_frac=max_perp_frac, max_angle_deg=max_angle_deg
+            )
+            conflict = dict(a=i, b=j, source_a=list(a["source_ids"]), source_b=list(b["source_ids"]), **cls)
+            conflicts.append(conflict)
+            for idx, other in ((i, b), (j, a)):
+                st = per_crop[idx]
+                st["overlap_conflict_count"] += 1
+                st["legacy_review_required"] = True
+                st["overlap_source_ids"].update(other["source_ids"])
+                if cls["minor_allowed"]:
+                    st["minor_conflict_count"] += 1
+                else:
+                    st["major_conflict_count"] += 1
+
+    for st in per_crop:
+        st["overlap_source_ids"] = sorted(st["overlap_source_ids"])
+        if st["overlap_conflict_count"] == 0:
+            st["overlap_severity"] = "clear"
+            st["minor_overlap_allowed"] = False
+            st["review_required"] = False
+        elif st["major_conflict_count"] > 0:
+            st["overlap_severity"] = "major_review"
+            st["minor_overlap_allowed"] = False
+            st["review_required"] = True
+        else:
+            st["overlap_severity"] = "minor_allowed"
+            st["minor_overlap_allowed"] = True
+            st["review_required"] = False
+
+    return conflicts, per_crop
 
 
 def inside(point,polygon):
@@ -154,11 +366,10 @@ def process(detections,width,height,duplicate_iou=.65,min_merge_iom=.2):
     decisions=[];boxes=[box(d['points'],d['label'],d.get('confidence',1),[d.get('id',str(i))]) for i,d in enumerate(detections)]
     boxes=deduplicate(boxes,decisions,duplicate_iou);boxes=group_lines(boxes,decisions,min_merge_iom)
     boxes.sort(key=lambda b:(b['label']=='dish_vertical',-b['center'][0] if b['label']=='dish_vertical' else b['center'][1],b['center'][1] if b['label']=='dish_vertical' else b['center'][0]))
-    scales=[1.]*len(boxes);conflicts=[]
+    scales=[1.]*len(boxes)
     for i,a in enumerate(boxes):
         for j in range(i+1,len(boxes)):
             b=boxes[j];m=overlap(a['core'],b['core'])
-            if m['iom']>.02:conflicts.append(dict(a=i,b=j,source_a=a['source_ids'],source_b=b['source_ids'],**m))
             current=overlap(padded(a,scales[i],width,height),padded(b,scales[j],width,height))['intersection']
             eps=max(1e-5,min(area(a['core']),area(b['core']))*1e-7)
             if current<=m['intersection']+eps:continue
@@ -171,17 +382,29 @@ def process(detections,width,height,duplicate_iou=.65,min_merge_iom=.2):
                 if inter<=eps:low=mid
                 else:high=mid
             scales[i]*=low;scales[j]*=low
+    conflicts, per_crop = classify_boxes_core_overlaps(boxes)
     output=[]
     for i,b in enumerate(boxes):
         q=padded(b,scales[i],width,height)
         if scales[i]<.999:decisions.append(dict(action='reduce_padding',sources=b['source_ids'],remaining_fraction=scales[i],reason='Avoidnewneighboroverlapwithoutclippingtextcore'))
+        st=per_crop[i]
         output.append(dict(id=f'line_{i:03d}',label=b['label'],confidence=b['confidence'],source_ids=b['source_ids'],
-            core=b['core'].tolist(),crop_polygon=q.tolist(),orientation_flag=int(b['label']=='dish_vertical'),padding_scale=scales[i]))
-    for c in conflicts:decisions.append(dict(action='unresolved_core_overlap',reason='Detectedtextcoresoverlap;preservedforhumanreview',**c))
+            core=b['core'].tolist(),crop_polygon=q.tolist(),orientation_flag=int(b['label']=='dish_vertical'),padding_scale=scales[i],
+            overlap_severity=st['overlap_severity'],minor_overlap_allowed=st['minor_overlap_allowed'],
+            review_required=st['review_required'],legacy_review_required=st['legacy_review_required'],
+            overlap_conflict_count=st['overlap_conflict_count'],overlap_source_ids=st['overlap_source_ids'],
+            minor_overlap_policy_version=st['minor_overlap_policy_version']))
+    for c in conflicts:
+        act = 'minor_core_overlap_allowed' if c['minor_allowed'] else 'unresolved_core_overlap'
+        decisions.append(dict(action=act, **c))
     return dict(crops=output,decisions=decisions,conflicts=conflicts,raw_count=len(detections),processed_count=len(output),
         policy=dict(duplicate_rotated_iou=duplicate_iou,containment_iom=.92,angle_degrees=8,perpendicular_overlap=.7,
                     centerline_fraction=.25,height_ratio=1.5,max_gap_height=.75,head_tail_margin_height=.12,perpendicular_margin_height=.08,
-                    minimum_merge_intersection_over_smaller_area=min_merge_iom,core_clipping=False,unresolved_overlap_is_flagged=True))
+                    minimum_merge_intersection_over_smaller_area=min_merge_iom,core_clipping=False,unresolved_overlap_is_flagged=True,
+                    minor_overlap_policy_version=MINOR_OVERLAP_POLICY_VERSION,
+                    minor_overlap_max_area_frac=MINOR_OVERLAP_MAX_AREA_FRAC,
+                    minor_overlap_max_perp_frac=MINOR_OVERLAP_MAX_PERP_FRAC,
+                    minor_overlap_max_angle_deg=MINOR_OVERLAP_MAX_ANGLE_DEG))
 
 
 def rectify(image,quad):

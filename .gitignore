@@ -73,3 +73,11 @@ venv/
 !/checkpoints/l2_v06/char_lm_4g_hp1010.json.gz
 !/checkpoints/l2_v06/char_lm_4g_hp1010_bwd.json.gz
 !/checkpoints/l2_v06/decoder_assets.json
+
+# Named 1901-character research candidate; not a registry promotion.
+!/checkpoints/l2_menu1901_digit_recovery/
+/checkpoints/l2_menu1901_digit_recovery/*
+!/checkpoints/l2_menu1901_digit_recovery/epoch_03_raw.pt
+!/checkpoints/l2_menu1901_digit_recovery/vocab.json
+!/checkpoints/l2_menu1901_digit_recovery/metadata.json
+!/checkpoints/l2_menu1901_digit_recovery/README.md

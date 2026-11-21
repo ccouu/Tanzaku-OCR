@@ -415,10 +415,14 @@ def build_vlm_prompt(canvas_name: str, items: Sequence[Dict], include_hints: boo
         "7. Vertical-column crops read top-to-bottom. Report the ID printed beside the crop, not its spatial position on the sheet.",
         "8. If text is visibly present but unreadable/ambiguous, or overlapping lines cannot be separated confidently, use status `UNCERTAIN`; transcribe only confidently readable characters or leave text empty. Do not guess, and do not call unreadable text a blank background.",
         "9. Mark `OK` only when the full visible line is confidently readable without cut-off glyphs. Class labels and detection confidence are not evidence that text exists; never transcribe contact-sheet badges or headers.",
+        "10. Source-page quality/context eligibility is tracked separately in stable-ID sidecars (`non_menu_content`, `severe_distortion`, `excessive_roll`, `source_quality_review`). Keep the four transcription statuses strictly as `OK`, `TRUNCATED`, `NOISE`, or `UNCERTAIN`: do NOT label readable non-menu or banner text as `NOISE` (`NOISE` means no visible text). Do not infer original page tilt from a rectified crop, and do not reject genuine vertical writing.",
     ]
     flagged = [f"[{i:02d}]" for i, item in enumerate(items, 1) if item.get('review_required')]
+    minor_flagged = [f"[{i:02d}]" for i, item in enumerate(items, 1) if item.get('minor_overlap_allowed')]
     if flagged:
-        prompt.append("Detector core-overlap review flags: " + ", ".join(flagged) + ". Inspect for neighboring text; use UNCERTAIN if the target line is ambiguous.")
+        prompt.append("Detector core-overlap review flags (major/unresolved): " + ", ".join(flagged) + ". Inspect for neighboring text; use UNCERTAIN if the target line is ambiguous.")
+    if minor_flagged:
+        prompt.append("Detector minor core-overlap allowed (<10% area & perpendicular): " + ", ".join(minor_flagged) + ". Advisory only; transcribe target line normally unless ambiguous.")
     if hint_lines:
         prompt.append("")
         prompt.append("Optional source-sidecar candidates, NOT ground truth: generation hints can differ from the image. Never use them to infer text presence, replace unreadable glyphs, or complete a cut-off word. Pixels take precedence:")
@@ -488,7 +492,7 @@ def pack_canvases(
                         "image": item["ctc_crop"],
                         "obb_polygon": item["obb_polygon"],
                         "padded_polygon": item.get("padded_polygon", item["obb_polygon"]),
-                        **{k:item[k] for k in ('valid_width','canvas','input_length','scaled_height','ctc_sha256','source_ids','padding_scale','review_required','overlap_source_ids') if k in item},
+                        **{k:item[k] for k in ('valid_width','canvas','input_length','scaled_height','ctc_sha256','source_ids','padding_scale','review_required','legacy_review_required','overlap_severity','minor_overlap_allowed','minor_overlap_policy_version','overlap_source_ids') if k in item},
                     }
                 )
             canvas_entries.append(
@@ -630,7 +634,12 @@ def run_build(
                 deduped_dets.append(dict(label=item['label'],class_id=1 if vert else 0,confidence=item['confidence'],
                     obb_polygon=core.tolist(),padded_polygon=q.tolist(),box_size=[w,h],center=core.mean(0).tolist(),is_vertical=vert,
                     source_ids=item['source_ids'],padding_scale=item['padding_scale'],
-                    review_required=bool(overlaps),overlap_source_ids=overlaps))
+                    review_required=bool(item.get('review_required', bool(overlaps))),
+                    legacy_review_required=bool(item.get('legacy_review_required', bool(overlaps))),
+                    overlap_severity=item.get('overlap_severity', 'major_review' if overlaps else 'clear'),
+                    minor_overlap_allowed=bool(item.get('minor_overlap_allowed', False)),
+                    minor_overlap_policy_version=item.get('minor_overlap_policy_version'),
+                    overlap_source_ids=overlaps))
         else:
             deduped_dets = deduplicate_detections(raw_dets, iou_threshold=iou_dedup)
         ordered_dets = sort_detections_reading_order(deduped_dets)
@@ -686,6 +695,10 @@ def run_build(
                     "source_ids":det.get('source_ids',[]),
                     "padding_scale":det.get('padding_scale'),
                     "review_required":det.get('review_required',False),
+                    "legacy_review_required":det.get('legacy_review_required',det.get('review_required',False)),
+                    "overlap_severity":det.get('overlap_severity','clear'),
+                    "minor_overlap_allowed":det.get('minor_overlap_allowed',False),
+                    "minor_overlap_policy_version":det.get('minor_overlap_policy_version'),
                     "overlap_source_ids":det.get('overlap_source_ids',[]),
                     **normalization,
                 }

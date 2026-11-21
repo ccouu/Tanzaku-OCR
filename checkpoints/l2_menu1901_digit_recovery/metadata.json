@@ -1,0 +1,41 @@
+{
+  "name": "L2_menu1901_digit_recovery",
+  "status": "preferred_research_candidate_not_promoted",
+  "checkpoint": "epoch_03_raw.pt",
+  "state_key": "raw",
+  "sha256": "7fcf4b34bb50e552b48b86dd5dad29265378f318c8e5a525a8b6261edda878bb",
+  "vocabulary": "vocab.json",
+  "vocab_sha256": "8ef5a6004cef9c187c88f2ef8a9461e35be5632b1d97b87d2c433f99558df0bc",
+  "characters": 1901,
+  "output_classes": 1902,
+  "blank_id": 0,
+  "architecture": "h4_k41",
+  "width_stride": 4,
+  "encoder_height": 4,
+  "bilstm_layers": 1,
+  "historical_experiment": "l2_1901_digits4_real40_1000",
+  "historical_stage": "stage_a",
+  "epoch": 3,
+  "historical_checkpoint": "outputs/recognition/experiments/l2_1901_digits4_real40_1000/stage_a/downloads/a_epoch_03.pt",
+  "historical_state": "raw",
+  "file_preserved_byte_identical": true,
+  "promotion_eligible": false,
+  "bn_buffers_frozen": 147,
+  "metrics": {
+    "precision": "FP32",
+    "decoder": "canonical_greedy",
+    "new_val_full_ok_cer": 0.4358,
+    "old_val10_cer": 0.0362,
+    "digits_heldout_cer": 0.0573,
+    "brackets_heldout_cer": 0.0958,
+    "noisy_1char_cer": 0.205,
+    "new122_macro_recall": 0.9044
+  },
+  "limitations": [
+    "Fails original parentheses and noisy-single-character retention caps",
+    "No compatible 1901 Char-LM validated",
+    "Seven ASCII Latin letters absent: Q V j p q w x",
+    "Provisional VLM labels; vocabulary inventory label-informed across splits"
+  ],
+  "registry_unchanged": true
+}

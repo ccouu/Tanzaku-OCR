@@ -1,5 +1,7 @@
 # L2 V01 — glyph-first random-start lineage
 
+> Updated 2026-11-20: the [combined L2_v01–L2_v02 summary](l2_v01_v02_dataset_training_summary.md) records the subsequent digit/numeral adaptation. AGY has now inspected the saved random-init artifact and verified its random-start state. The current registry is **L2_v06 epoch2 EMA**; the V43 registry statement below is historical.
+
 Verified 2026-11-17 after the user renamed the former **H4 V81** experiments to **`l2_v01`**. This is a new weight lineage, not a continuation of original V75 or H4 V75. `L2` is the lineage name: it does **not** mean two BiLSTM layers.
 
 ## Identity and ancestry

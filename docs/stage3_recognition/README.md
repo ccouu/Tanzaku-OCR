@@ -1,5 +1,7 @@
 # Stage 3 — recognition implementation, status and experiment records
 
+**Latest checkpoint recommendation (2026-11-21): [L2_menu1901_digit_recovery](preferred_checkpoint.md)** — descriptive name for Stage A epoch 3 RAW from `l2_1901_digits4_real40_1000`, published under `checkpoints/l2_menu1901_digit_recovery/`, 1901 characters, research-only and not retention-eligible. [Full L2 dataset/training history](l2_v01_v02_dataset_training_summary.md) now covers L2_v01–L2_v06 and the later Dishlex/Tabelog/1901 branches. Registry remains L2_v06 epoch 2 EMA.
+
 Start with [current implementation/status](current_status.md), [compact handoff](HANDOFF.md), and [experiment summary](stage3_summary.md). Historical results below describe their own datasets and policies, not the currently deployed model.
 
 **Promoted (2026-11-19): L2_v06 epoch2 EMA**, H4 architecture, at `checkpoints/l2_v06/epoch_02.pt`, resolved by `src/recognition/current_model.json`. V43 remains rollback. See the [promotion record](l2_v06_promotion.md). Original V75/V76/V77 notes below describe an earlier research lineage, not the current model ranking.

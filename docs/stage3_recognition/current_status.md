@@ -1,5 +1,7 @@
 # Stage 3 current implementation and reviewed status
 
+> **2026-11-21 checkpoint update:** [L2_menu1901_digit_recovery](preferred_checkpoint.md) is the descriptive name for preferred **Stage A epoch 3 RAW**, 1901 characters; not gate-eligible or promoted. Registry remains **L2_v06 epoch 2 EMA**; inspector override is **Dishlex50 epoch 5 RAW**, both 1779 characters. See [extended L2 training history](l2_v01_v02_dataset_training_summary.md). Original-lineage sections below are historical snapshots and do not override these roles.
+
 > **2026-11-19 explicit registry promotion:** current recognizer is **L2_v06 epoch2 EMA (H4)**, verified vocabulary and weights. V43 is preserved for rollback. See [promotion details](l2_v06_promotion.md) and [Char-LM validation](char_lm_validation.md). Decoder/R1 patches remain unapplied review candidates; the original-lineage snapshot below does not override this update.
 
 > **Latest Implementation Plan (2026-11-17):** See [docs/implementation_plan.md](../implementation_plan.md) for the current `L2_v06` (`checkpoints/l2_v06/epoch_02.pt` EMA) promoted checkpoint, HotPepper scraping, LLM morpheme/slot extraction, 4-gram Char-LM CTC beam search, and Morpheme Trie lookup plan.

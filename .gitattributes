@@ -1,4 +1,5 @@
 checkpoints/l2_v01/epoch_08.pt filter=lfs diff=lfs merge=lfs -text
 checkpoints/l2_v06/epoch_02.pt filter=lfs diff=lfs merge=lfs -text
+checkpoints/l2_menu1901_digit_recovery/epoch_03_raw.pt filter=lfs diff=lfs merge=lfs -text
 # Unified diffs require a single-space marker on blank context lines.
 reviews/char_lm_20261119/candidates/*.diff whitespace=-blank-at-eol

@@ -56,3 +56,13 @@ def test_selected_model_and_no_hint_prompt():
 
 def test_invalid_canvas_size_rejected(tmp_path):
     with pytest.raises(ValueError):pack_canvases([],tmp_path,items_per_canvas=0)
+
+
+def test_vlm_prompt_includes_source_quality_context_and_preserves_four_statuses():
+    prompt = build_vlm_prompt('canvas_001.png', [dict(source_image='menu_13000001.jpg')], include_hints=False)
+    assert '<OK | TRUNCATED | NOISE | UNCERTAIN>' in prompt
+    assert 'non_menu_content' in prompt
+    assert 'severe_distortion' in prompt
+    assert 'excessive_roll' in prompt
+    assert 'do NOT label readable non-menu or banner text as `NOISE`' in prompt
+    assert 'do not reject genuine vertical writing' in prompt
