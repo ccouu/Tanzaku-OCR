@@ -715,7 +715,7 @@ class IosCoreMLBackend implements MenuBackend {
       configId: _configId(settings),
       backendId: 'ios_coreml_native',
       deviceName: _deviceName,
-      precision: 'fp16',
+      precision: 'fp32',
       bundleId: _bundleId,
       status: status,
       stage: stage,

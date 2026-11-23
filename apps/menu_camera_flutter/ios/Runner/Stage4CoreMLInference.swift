@@ -1,9 +1,9 @@
 // Stage 4 Native iOS Core ML Inference Engine:
 //   - V5 YOLO11n-OBB (1024x1024 letterbox -> raw [1, 7, 21504] Float32)
 //   - Exact Split Recognizer:
-//       1) RecognizerFeatureExtractor_fp16.mlmodelc on physical replicate-padded bucket [128,256,384,512]
+//       1) RecognizerFeatureExtractor_fp32.mlmodelc on physical replicate-padded bucket [128,256,384,512]
 //       2) Host valid_T = (validW + 3) / 4 prefix slice BEFORE backward LSTM
-//       3) RecognizerRecurrentHead_fp16.mlmodelc on [1, 256, valid_T] -> [valid_T, 1, 2106] Float32
+//       3) RecognizerRecurrentHead_fp32.mlmodelc on [1, 256, valid_T] -> [valid_T, 1, 2106] Float32
 //   - CoreImage perspective rectification + once-only 90° CCW vertical rotation + H64 aspect strip.
 
 import CoreGraphics
@@ -37,9 +37,9 @@ final class Stage4CoreMLInference {
 
     func missingRequiredResources() -> [String] {
         let required = [
-            "V5DetectorOBB1024_fp16.mlmodelc",
-            "RecognizerFeatureExtractor_fp16.mlmodelc",
-            "RecognizerRecurrentHead_fp16.mlmodelc",
+            "V5DetectorOBB1024_fp32.mlmodelc",
+            "RecognizerFeatureExtractor_fp32.mlmodelc",
+            "RecognizerRecurrentHead_fp32.mlmodelc",
             "target_vocab_active.json",
             "char_lm_4g_hp1010_v2.json.gz",
             "lexicon_index_v3_22112026.json.gz",
@@ -57,9 +57,9 @@ final class Stage4CoreMLInference {
         let cfg = MLModelConfiguration()
         cfg.computeUnits = .all
 
-        guard let detURL = bundledResourceURL("V5DetectorOBB1024_fp16.mlmodelc"),
-              let featURL = bundledResourceURL("RecognizerFeatureExtractor_fp16.mlmodelc"),
-              let headURL = bundledResourceURL("RecognizerRecurrentHead_fp16.mlmodelc") else {
+        guard let detURL = bundledResourceURL("V5DetectorOBB1024_fp32.mlmodelc"),
+              let featURL = bundledResourceURL("RecognizerFeatureExtractor_fp32.mlmodelc"),
+              let headURL = bundledResourceURL("RecognizerRecurrentHead_fp32.mlmodelc") else {
             throw Stage4PluginError.assetsNotBundled(missing: missingRequiredResources())
         }
         detectorModel = try MLModel(contentsOf: detURL, configuration: cfg)

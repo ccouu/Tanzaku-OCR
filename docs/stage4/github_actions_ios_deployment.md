@@ -1,5 +1,10 @@
 # Stage 4 GitHub Actions macOS Core ML Parity & iOS IPA Deployment Guide
 
+## Current functional-build update — 2026-11-23
+
+The unsigned compile-only iOS build passed. Actual Mac Core ML runtime parity in run 45235938635 passed FP32; FP16 failed strict logit and long-line parity, so the first functional IPA ships FP32 models with matching filenames and runtime metadata. FP32 parity remains mandatory before packaging; FP16 runs only as an explicitly unshipped diagnostic. Asset delivery uses owner-approved unpublished draft releases; only the functional job has contents-write permission for draft visibility, and checkout does not persist credentials. No release is published. Earlier investigation notes below are historical, including claims that native implementation/publication remained unfinished. On-device behavior and speed still require physical iPhone testing.
+
+
 **User-selected route,2026-11-23:** build an **unsigned release device IPA on GitHub**, then sign/install it on Windows using a free Apple ID in Sideloadly (AltStore Classic alternative). Follow [Windows signing instructions](windows_free_apple_id_installation.md). This supersedes signed-in-CI as the default for the personal trial: no Apple signing secrets or paid-team profile is needed in CI. The unsigned IPA still must be signed locally before installation; native inference/resource/parity gates remain mandatory. Older signed-CI sections below describe an optional alternative, not the chosen route.
 
 Date: 2026-11-23 *(local investigation & workflow draft — zero git push, zero CI trigger, zero public asset release performed)*

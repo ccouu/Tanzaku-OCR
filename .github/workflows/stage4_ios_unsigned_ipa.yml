@@ -225,23 +225,30 @@ jobs:
           source "$RUNNER_TEMP/coreml_val_venv/bin/activate"
           python3 -c "from src.stage4.bundle_manifest import verify_pinned_stage4_bundle; b = verify_pinned_stage4_bundle(strict=True); assert b['all_verified']; print('[PASS] All 6 pinned Stage 4 assets SHA-256 verified!')"
 
-      - name: MANDATORY Mac Core ML .predict() Runtime Parity Gate (FP32 + FP16)
+      - name: MANDATORY Mac Core ML .predict() Runtime Parity Gate (shipped FP32)
         run: |
           set -euo pipefail
           source "$RUNNER_TEMP/coreml_val_venv/bin/activate"
           python3 scripts/stage4/verify_coreml_runtime_parity.py \
             --out-dir outputs/stage4/coreml_export_iphone_20261123 \
             --precision fp32
+
+      # FP16 is not shipped: native runtime diagnostics failed its strict gates.
+      # Keep its report visible while only accepting the validated FP32 payload.
+      - name: Diagnostic only - unshipped FP16 runtime parity
+        continue-on-error: true
+        run: |
+          source "$RUNNER_TEMP/coreml_val_venv/bin/activate"
           python3 scripts/stage4/verify_coreml_runtime_parity.py \
             --out-dir outputs/stage4/coreml_export_iphone_20261123 \
             --precision fp16
 
-      - name: Compile verified FP16 .mlpackage models to .mlmodelc & stage runtime assets
+      - name: Compile verified FP32 .mlpackage models to .mlmodelc & stage runtime assets
         run: |
           set -euo pipefail
           STAGE_RES="$RUNNER_TEMP/Stage4Bundle"
           rm -rf "$STAGE_RES" && mkdir -p "$STAGE_RES"
-          for pkg in outputs/stage4/coreml_export_iphone_20261123/mlpackages/fp16/*.mlpackage; do
+          for pkg in outputs/stage4/coreml_export_iphone_20261123/mlpackages/fp32/*.mlpackage; do
             xcrun coremlcompiler compile "$pkg" "$STAGE_RES"
           done
           cp outputs/recognition/experiments/l2_selected2105_short_recovery_1000/payload/target_vocab_active.json "$STAGE_RES/"
@@ -276,7 +283,7 @@ jobs:
           ditto "$RUNNER_TEMP/Stage4Bundle" "$OUT/Payload/Runner.app/Stage4Bundle"
 
           # Verify compiled .mlmodelc + vocab/LM/lexicon/DB are actually inside Runner.app/Stage4Bundle
-          for req in V5DetectorOBB1024_fp16.mlmodelc RecognizerFeatureExtractor_fp16.mlmodelc RecognizerRecurrentHead_fp16.mlmodelc target_vocab_active.json char_lm_4g_hp1010_v2.json lexicon_index_v3_22112026.json culinary_menu.db; do
+          for req in V5DetectorOBB1024_fp32.mlmodelc RecognizerFeatureExtractor_fp32.mlmodelc RecognizerRecurrentHead_fp32.mlmodelc target_vocab_active.json char_lm_4g_hp1010_v2.json lexicon_index_v3_22112026.json culinary_menu.db; do
             test -e "$OUT/Payload/Runner.app/Stage4Bundle/$req"
           done
 
