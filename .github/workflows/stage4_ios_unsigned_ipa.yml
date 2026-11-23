@@ -69,6 +69,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
 
       - name: Log pinned macOS / Xcode / ARM64 runner identity
         run: |
@@ -128,6 +130,10 @@ jobs:
             ${{ runner.temp }}/unsigned_smoke_out/SHA256SUMS.txt
 
   functional_unsigned_ipa:
+    # Owner-approved: draft release assets require push-level visibility.
+    # This job does not publish releases or modify repository content.
+    permissions:
+      contents: write
     name: Mac Core ML .predict() Parity + Functional Unsigned IPA (For Windows Signing)
     if: ${{ github.event_name == 'workflow_dispatch' && inputs.build_mode == 'functional_unsigned_ipa' }}
     runs-on: macos-15
@@ -135,6 +141,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
 
       - name: Log pinned macOS / Xcode / ARM64 runner identity
         run: |
