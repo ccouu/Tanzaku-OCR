@@ -1,0 +1,9 @@
+# Pinned isolated Core ML export requirements for macOS / Linux ONLY.
+# NEVER install into the desktop Windows `.venv-recognition` environment.
+# Verify exact PyTorch / coremltools compatibility on target macOS/Linux before export.
+coremltools>=8.1,<9.0
+torch>=2.4,<2.7
+timm==1.0.31
+ultralytics>=8.3,<8.4
+numpy>=1.26,<2.3
+pillow>=10.0

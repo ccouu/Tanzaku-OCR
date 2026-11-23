@@ -1,0 +1,280 @@
+# Stage 4 iOS Core ML Parity & Unsigned Release IPA Workflow (Free Apple ID / Windows Signing Route)
+#
+# Route: GitHub Actions macos-15 (ARM64) -> unsigned Release Payload/Runner.app (.ipa via ditto)
+#        -> User downloads artifact on Windows -> signs & installs locally via Sideloadly / AltStore Classic
+#        with user's own free Apple ID (zero Apple passwords, P12s, profiles, or paid CI secrets in GitHub).
+#
+# Two explicit modes:
+#   1. compile_only_smoke (default on push / manual without model URLs):
+#      Proves Flutter + 4 native Swift modules compile cleanly for ARM64 device (--release --no-codesign)
+#      and packages an unsigned smoke IPA clearly labelled NOT-FUNCTIONAL-OCR (no bundled Core ML models).
+#   2. functional_unsigned_ipa (manual workflow_dispatch with explicit checksummed asset URLs):
+#      Downloads & SHA-256 verifies Colab .mlpackage bundle + reference validation bundle ->
+#      runs mandatory Mac Core ML .predict() parity (FP32 + FP16) BEFORE iOS build ->
+#      compiles .mlpackage -> .mlmodelc + stages runtime assets into Runner.app/Stage4Bundle ->
+#      packages complete Payload/Runner.app with ditto + SHA-256 + parity reports.
+
+name: Stage 4 iOS Unsigned IPA (Windows Free-ID Signing)
+
+on:
+  push:
+    branches: ["main"]
+    paths:
+      - "apps/menu_camera_flutter/**"
+      - ".github/workflows/stage4_ios_unsigned_ipa.yml"
+  workflow_dispatch:
+    inputs:
+      build_mode:
+        description: "compile_only_smoke (no model URLs) or functional_unsigned_ipa (requires verified model/reference URLs + Mac parity)"
+        required: true
+        default: "compile_only_smoke"
+        type: choice
+        options:
+          - compile_only_smoke
+          - functional_unsigned_ipa
+      mlpackages_bundle_url:
+        description: "HTTPS URL to verified coreml_mlpackages_bundle.tar.gz (required for functional_unsigned_ipa)"
+        required: false
+        default: ""
+        type: string
+      mlpackages_bundle_sha256:
+        description: "Expected SHA-256 of coreml_mlpackages_bundle.tar.gz (required for functional_unsigned_ipa)"
+        required: false
+        default: ""
+        type: string
+      reference_validation_bundle_url:
+        description: "HTTPS URL to stage4_reference_validation_bundle.tar.gz (required for functional_unsigned_ipa)"
+        required: false
+        default: ""
+        type: string
+      reference_validation_bundle_sha256:
+        description: "Expected SHA-256 of stage4_reference_validation_bundle.tar.gz (required for functional_unsigned_ipa)"
+        required: false
+        default: ""
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: stage4-ios-unsigned-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  compile_only_smoke:
+    name: iOS ARM64 Compile-Only Smoke (Unsigned, No Bundled Models)
+    if: ${{ github.event_name == 'push' || inputs.build_mode == 'compile_only_smoke' }}
+    runs-on: macos-15
+    timeout-minutes: 35
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Log pinned macOS / Xcode / ARM64 runner identity
+        run: |
+          uname -a
+          uname -m
+          sw_vers
+          xcodebuild -version
+
+      - name: Verify native Swift modules are present and registered in Xcode Runner target
+        run: |
+          set -euo pipefail
+          PBX="apps/menu_camera_flutter/ios/Runner.xcodeproj/project.pbxproj"
+          for f in CoreMLMenuPlugin.swift Stage4NativeCamera.swift Stage4CoreMLInference.swift Stage4SQLiteStore.swift; do
+            test -f "apps/menu_camera_flutter/ios/Runner/$f"
+            grep -q "$f in Sources" "$PBX"
+          done
+          echo "[PASS] All 4 native Swift modules present and registered in Runner target."
+
+      - name: Set up pinned Flutter 3.50.1
+        uses: subosito/flutter-action@e938fdf56512cc96ef2f93cfde9255017761356e # v2.20.0
+        with:
+          flutter-version: "3.50.1"
+          channel: "stable"
+          cache: true
+
+      - name: Flutter pub get, analyze, unit/parity tests, and ARM64 release --no-codesign build
+        working-directory: apps/menu_camera_flutter
+        run: |
+          set -euo pipefail
+          flutter pub get
+          flutter analyze
+          flutter test
+          flutter build ios --release --no-codesign
+
+      - name: Package complete Payload/Runner.app as unsigned IPA via ditto + SHA-256
+        working-directory: apps/menu_camera_flutter
+        run: |
+          set -euo pipefail
+          APP="build/ios/iphoneos/Runner.app"
+          test -d "$APP"
+          OUT="$RUNNER_TEMP/unsigned_smoke_out"
+          rm -rf "$OUT" && mkdir -p "$OUT/Payload"
+          ditto "$APP" "$OUT/Payload/Runner.app"
+          IPA="$OUT/MenuCameraStage4-compile-only-smoke-unsigned-for-Windows-signing.ipa"
+          (cd "$OUT" && ditto -c -k --sequesterRsrc --keepParent Payload "$IPA")
+          shasum -a 256 "$IPA" > "$OUT/SHA256SUMS.txt"
+          ls -lh "$IPA"
+          cat "$OUT/SHA256SUMS.txt"
+
+      - name: Upload unsigned compile-only smoke IPA (NOT functional OCR — no bundled models)
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: stage4-ios-compile-only-smoke-unsigned-for-Windows-signing
+          retention-days: 7
+          path: |
+            ${{ runner.temp }}/unsigned_smoke_out/*.ipa
+            ${{ runner.temp }}/unsigned_smoke_out/SHA256SUMS.txt
+
+  functional_unsigned_ipa:
+    name: Mac Core ML .predict() Parity + Functional Unsigned IPA (For Windows Signing)
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.build_mode == 'functional_unsigned_ipa' }}
+    runs-on: macos-15
+    timeout-minutes: 45
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Log pinned macOS / Xcode / ARM64 runner identity
+        run: |
+          uname -a
+          uname -m
+          sw_vers
+          xcodebuild -version
+
+      - name: Validate explicit checksummed asset URLs & native Swift capabilities
+        env:
+          MLPKG_URL: ${{ inputs.mlpackages_bundle_url }}
+          MLPKG_SHA: ${{ inputs.mlpackages_bundle_sha256 }}
+          REF_URL: ${{ inputs.reference_validation_bundle_url }}
+          REF_SHA: ${{ inputs.reference_validation_bundle_sha256 }}
+        run: |
+          set -euo pipefail
+          for v in MLPKG_URL MLPKG_SHA REF_URL REF_SHA; do
+            if [ -z "${!v}" ]; then
+              echo "[FAIL] functional_unsigned_ipa requires explicit $v input." >&2
+              exit 1
+            fi
+          done
+          PBX="apps/menu_camera_flutter/ios/Runner.xcodeproj/project.pbxproj"
+          for f in CoreMLMenuPlugin.swift Stage4NativeCamera.swift Stage4CoreMLInference.swift Stage4SQLiteStore.swift; do
+            test -f "apps/menu_camera_flutter/ios/Runner/$f"
+            grep -q "$f in Sources" "$PBX"
+          done
+
+      - name: Set up Python 3.12 (isolated Core ML validation env)
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.12"
+
+      - name: Install isolated Core ML validation dependencies
+        run: |
+          set -euo pipefail
+          python3 -m venv "$RUNNER_TEMP/coreml_val_venv"
+          source "$RUNNER_TEMP/coreml_val_venv/bin/activate"
+          pip install --upgrade pip
+          pip install -r scripts/stage4/export_requirements_macos_linux.txt
+
+      - name: Download & SHA-256 verify Colab .mlpackage bundle + reference validation bundle
+        env:
+          MLPKG_URL: ${{ inputs.mlpackages_bundle_url }}
+          MLPKG_SHA: ${{ inputs.mlpackages_bundle_sha256 }}
+          REF_URL: ${{ inputs.reference_validation_bundle_url }}
+          REF_SHA: ${{ inputs.reference_validation_bundle_sha256 }}
+        run: |
+          set -euo pipefail
+          mkdir -p outputs/stage4/coreml_export_iphone_20261123/mlpackages
+
+          curl -fsSL "$MLPKG_URL" -o "$RUNNER_TEMP/coreml_mlpackages_bundle.tar.gz"
+          ACTUAL_MLPKG_SHA="$(shasum -a 256 "$RUNNER_TEMP/coreml_mlpackages_bundle.tar.gz" | awk '{print $1}')"
+          if [ "$ACTUAL_MLPKG_SHA" != "$MLPKG_SHA" ]; then
+            echo "mlpackages SHA-256 mismatch: expected $MLPKG_SHA, got $ACTUAL_MLPKG_SHA" >&2
+            exit 1
+          fi
+          tar -xzf "$RUNNER_TEMP/coreml_mlpackages_bundle.tar.gz" \
+            -C outputs/stage4/coreml_export_iphone_20261123/mlpackages
+
+          curl -fsSL "$REF_URL" -o "$RUNNER_TEMP/stage4_reference_validation_bundle.tar.gz"
+          ACTUAL_REF_SHA="$(shasum -a 256 "$RUNNER_TEMP/stage4_reference_validation_bundle.tar.gz" | awk '{print $1}')"
+          if [ "$ACTUAL_REF_SHA" != "$REF_SHA" ]; then
+            echo "reference validation bundle SHA-256 mismatch: expected $REF_SHA, got $ACTUAL_REF_SHA" >&2
+            exit 1
+          fi
+          tar -xzf "$RUNNER_TEMP/stage4_reference_validation_bundle.tar.gz" -C .
+
+          source "$RUNNER_TEMP/coreml_val_venv/bin/activate"
+          python3 -c "from src.stage4.bundle_manifest import verify_pinned_stage4_bundle; b = verify_pinned_stage4_bundle(strict=True); assert b['all_verified']; print('[PASS] All 6 pinned Stage 4 assets SHA-256 verified!')"
+
+      - name: MANDATORY Mac Core ML .predict() Runtime Parity Gate (FP32 + FP16)
+        run: |
+          set -euo pipefail
+          source "$RUNNER_TEMP/coreml_val_venv/bin/activate"
+          python3 scripts/stage4/verify_coreml_runtime_parity.py \
+            --out-dir outputs/stage4/coreml_export_iphone_20261123 \
+            --precision fp32
+          python3 scripts/stage4/verify_coreml_runtime_parity.py \
+            --out-dir outputs/stage4/coreml_export_iphone_20261123 \
+            --precision fp16
+
+      - name: Compile verified FP16 .mlpackage models to .mlmodelc & stage runtime assets
+        run: |
+          set -euo pipefail
+          STAGE_RES="$RUNNER_TEMP/Stage4Bundle"
+          rm -rf "$STAGE_RES" && mkdir -p "$STAGE_RES"
+          for pkg in outputs/stage4/coreml_export_iphone_20261123/mlpackages/fp16/*.mlpackage; do
+            xcrun coremlcompiler compile "$pkg" "$STAGE_RES"
+          done
+          cp outputs/recognition/experiments/l2_selected2105_short_recovery_1000/payload/target_vocab_active.json "$STAGE_RES/"
+          gunzip -c outputs/recognition/validation/char_lm_followup_20261119/candidates/char_lm_4g_hp1010_v2.json.gz > "$STAGE_RES/char_lm_4g_hp1010_v2.json"
+          cp outputs/recognition/validation/char_lm_followup_20261119/candidates/char_lm_4g_hp1010_v2.json.gz "$STAGE_RES/"
+          gunzip -c data/processed/lexicon/lexicon_index_v3_22112026.json.gz > "$STAGE_RES/lexicon_index_v3_22112026.json"
+          cp data/processed/lexicon/lexicon_index_v3_22112026.json.gz "$STAGE_RES/"
+          cp data/processed/lexicon/culinary_menu.db "$STAGE_RES/"
+          ls -lh "$STAGE_RES"
+
+      - name: Set up pinned Flutter 3.50.1
+        uses: subosito/flutter-action@e938fdf56512cc96ef2f93cfde9255017761356e # v2.20.0
+        with:
+          flutter-version: "3.50.1"
+          channel: "stable"
+          cache: true
+
+      - name: Flutter analyze, tests, ARM64 release --no-codesign build, embed Stage4Bundle & package IPA via ditto
+        working-directory: apps/menu_camera_flutter
+        run: |
+          set -euo pipefail
+          flutter pub get
+          flutter analyze
+          flutter test
+          flutter build ios --release --no-codesign
+
+          APP="build/ios/iphoneos/Runner.app"
+          test -d "$APP"
+          OUT="$RUNNER_TEMP/unsigned_functional_out"
+          rm -rf "$OUT" && mkdir -p "$OUT/Payload"
+          ditto "$APP" "$OUT/Payload/Runner.app"
+          ditto "$RUNNER_TEMP/Stage4Bundle" "$OUT/Payload/Runner.app/Stage4Bundle"
+
+          # Verify compiled .mlmodelc + vocab/LM/lexicon/DB are actually inside Runner.app/Stage4Bundle
+          for req in V5DetectorOBB1024_fp16.mlmodelc RecognizerFeatureExtractor_fp16.mlmodelc RecognizerRecurrentHead_fp16.mlmodelc target_vocab_active.json char_lm_4g_hp1010_v2.json lexicon_index_v3_22112026.json culinary_menu.db; do
+            test -e "$OUT/Payload/Runner.app/Stage4Bundle/$req"
+          done
+
+          IPA="$OUT/MenuCameraStage4-functional-unsigned-for-Windows-signing.ipa"
+          (cd "$OUT" && ditto -c -k --sequesterRsrc --keepParent Payload "$IPA")
+          shasum -a 256 "$IPA" > "$OUT/SHA256SUMS.txt"
+          ls -lh "$IPA"
+          cat "$OUT/SHA256SUMS.txt"
+
+      - name: Upload functional unsigned IPA + parity reports (for Windows Sideloadly/AltStore signing)
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: stage4-ios-functional-unsigned-for-Windows-signing
+          retention-days: 7
+          path: |
+            ${{ runner.temp }}/unsigned_functional_out/*.ipa
+            ${{ runner.temp }}/unsigned_functional_out/SHA256SUMS.txt
+            outputs/stage4/coreml_export_iphone_20261123/coreml_runtime_parity_fp32.json
+            outputs/stage4/coreml_export_iphone_20261123/coreml_runtime_parity_fp16.json

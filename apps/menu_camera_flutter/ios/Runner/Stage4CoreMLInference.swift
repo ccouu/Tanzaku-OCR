@@ -1,0 +1,356 @@
+// Stage 4 Native iOS Core ML Inference Engine:
+//   - V5 YOLO11n-OBB (1024x1024 letterbox -> raw [1, 7, 21504] Float32)
+//   - Exact Split Recognizer:
+//       1) RecognizerFeatureExtractor_fp16.mlmodelc on physical replicate-padded bucket [128,256,384,512]
+//       2) Host valid_T = (validW + 3) / 4 prefix slice BEFORE backward LSTM
+//       3) RecognizerRecurrentHead_fp16.mlmodelc on [1, 256, valid_T] -> [valid_T, 1, 2106] Float32
+//   - CoreImage perspective rectification + once-only 90° CCW vertical rotation + H64 aspect strip.
+
+import CoreGraphics
+import CoreImage
+import CoreML
+import Foundation
+import UIKit
+
+final class Stage4CoreMLInference {
+    static let bundleId = "stage4_step1000_raw_2105_v5_lmv2_lexv3_20261123"
+    static let detectorImgSz = 1024
+    static let recognizerBuckets: [Int] = [128, 256, 384, 512]
+    static let imageNetMean: [Float] = [0.485, 0.456, 0.406]
+    static let imageNetStd: [Float] = [0.229, 0.224, 0.225]
+
+    private var detectorModel: MLModel?
+    private var featExtractorModel: MLModel?
+    private var recurrentHeadModel: MLModel?
+    private let ciContext = CIContext(options: [.useSoftwareRenderer: false])
+    private(set) var modelsLoaded = false
+
+    func bundledResourceURL(_ filename: String) -> URL? {
+        let ns = filename as NSString
+        let name = ns.deletingPathExtension
+        let ext = ns.pathExtension
+        if let u = Bundle.main.url(forResource: name, withExtension: ext, subdirectory: "Stage4Bundle") {
+            return u
+        }
+        return Bundle.main.url(forResource: name, withExtension: ext)
+    }
+
+    func missingRequiredResources() -> [String] {
+        let required = [
+            "V5DetectorOBB1024_fp16.mlmodelc",
+            "RecognizerFeatureExtractor_fp16.mlmodelc",
+            "RecognizerRecurrentHead_fp16.mlmodelc",
+            "target_vocab_active.json",
+            "char_lm_4g_hp1010_v2.json.gz",
+            "lexicon_index_v3_22112026.json.gz",
+            "culinary_menu.db",
+        ]
+        return required.filter { bundledResourceURL($0) == nil }
+    }
+
+    func loadModelsIfNeeded() throws {
+        if modelsLoaded { return }
+        let missing = missingRequiredResources()
+        if !missing.isEmpty {
+            throw Stage4PluginError.assetsNotBundled(missing: missing)
+        }
+        let cfg = MLModelConfiguration()
+        cfg.computeUnits = .all
+
+        guard let detURL = bundledResourceURL("V5DetectorOBB1024_fp16.mlmodelc"),
+              let featURL = bundledResourceURL("RecognizerFeatureExtractor_fp16.mlmodelc"),
+              let headURL = bundledResourceURL("RecognizerRecurrentHead_fp16.mlmodelc") else {
+            throw Stage4PluginError.assetsNotBundled(missing: missingRequiredResources())
+        }
+        detectorModel = try MLModel(contentsOf: detURL, configuration: cfg)
+        featExtractorModel = try MLModel(contentsOf: featURL, configuration: cfg)
+        recurrentHeadModel = try MLModel(contentsOf: headURL, configuration: cfg)
+        modelsLoaded = true
+    }
+
+    /// Letterbox RGB image to 1024x1024 (pad 114/255) and run V5 YOLO11n-OBB Core ML model.
+    func runDetectorOBB1024(image: UIImage) throws -> (rawFloatBytes: Data, numAnchors: Int, meta: [String: Double]) {
+        try loadModelsIfNeeded()
+        guard let model = detectorModel, let cg = image.cgImage else {
+            throw Stage4PluginError.inferenceFailure("Detector model or CGImage unavailable.")
+        }
+
+        let srcW = Double(cg.width)
+        let srcH = Double(cg.height)
+        let target = Double(Self.detectorImgSz)
+        let gain = min(target / srcW, target / srcH)
+        let newW = Int((srcW * gain).rounded())
+        let newH = Int((srcH * gain).rounded())
+        let left = Int(((target - Double(newW)) / 2.0 - 0.1).rounded())
+        let top = Int(((target - Double(newH)) / 2.0 - 0.1).rounded())
+
+        let sz = Self.detectorImgSz
+        var rgba = [UInt8](repeating: 114, count: sz * sz * 4)
+        for i in stride(from: 3, to: rgba.count, by: 4) { rgba[i] = 255 }
+
+        let colorSpace = CGColorSpaceCreateDeviceRGB()
+        rgba.withUnsafeMutableBytes { ptr in
+            if let ctx = CGContext(
+                data: ptr.baseAddress,
+                width: sz,
+                height: sz,
+                bitsPerComponent: 8,
+                bytesPerRow: sz * 4,
+                space: colorSpace,
+                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+            ) {
+                ctx.interpolationQuality = .medium
+                // CoreGraphics origin is bottom-left; flip y to match top-left PIL letterbox
+                ctx.draw(cg, in: CGRect(x: left, y: sz - top - newH, width: newW, height: newH))
+            }
+        }
+
+        let inputArr = try MLMultiArray(shape: [1, 3, NSNumber(value: sz), NSNumber(value: sz)], dataType: .float32)
+        let dst = inputArr.dataPointer.bindMemory(to: Float.self, capacity: 3 * sz * sz)
+        let plane = sz * sz
+        for p in 0..<plane {
+            let base = p * 4
+            dst[p] = Float(rgba[base]) / 255.0
+            dst[plane + p] = Float(rgba[base + 1]) / 255.0
+            dst[2 * plane + p] = Float(rgba[base + 2]) / 255.0
+        }
+
+        let provider = try MLDictionaryFeatureProvider(dictionary: ["image_rgb01": MLFeatureValue(multiArray: inputArr)])
+        let out = try model.prediction(from: provider)
+        guard let rawArr = out.featureValue(for: "raw_obb")?.multiArrayValue else {
+            throw Stage4PluginError.inferenceFailure("Detector output 'raw_obb' missing.")
+        }
+        let numAnchors = rawArr.shape.last?.intValue ?? 21504
+        let count = 7 * numAnchors
+        let floatData = multiArrayToContiguousFloat32Data(rawArr, count: count)
+        return (
+            floatData,
+            numAnchors,
+            ["gain": gain, "pad_x": Double(left), "pad_y": Double(top), "src_w": srcW, "src_h": srcH]
+        )
+    }
+
+    /// Rectify one OBB polygon -> upright crop + H64 strip -> split Core ML recognizer -> raw FP32 logits.
+    func recognizeCrop(
+        sourceImage: UIImage,
+        polygon: [[Double]],
+        orientationFlag: Int
+    ) throws -> [String: Any] {
+        try loadModelsIfNeeded()
+        guard let featModel = featExtractorModel,
+              let headModel = recurrentHeadModel,
+              let cg = sourceImage.cgImage,
+              polygon.count >= 4 else {
+            throw Stage4PluginError.inferenceFailure("Recognizer models or crop polygon invalid.")
+        }
+
+        let stripCG = try rectifyAndScaleToH64(cgImage: cg, polygon: polygon, orientationFlag: orientationFlag)
+        let previewPNG = UIImage(cgImage: stripCG).pngData() ?? Data()
+
+        if stripCG.width > 512 {
+            // >512px multi-window overlap-100 fallback (matching Python long_line_inference.py)
+            let ranges = computeWindowRanges(width: stripCG.width, maxWidth: 512, overlap: 100)
+            var windowPaths: [[Int]] = []
+            for r in ranges {
+                let left = r[0]
+                let right = r[1]
+                let rect = CGRect(x: left, y: 0, width: right - left, height: stripCG.height)
+                guard let winCG = stripCG.cropping(to: rect) else { continue }
+                let (logitsData, validT) = try runSplitRecognizerOnStrip(
+                    stripCG: winCG,
+                    orientationFlag: orientationFlag,
+                    featModel: featModel,
+                    headModel: headModel
+                )
+                let path = argmaxPerFrame(logitsData: logitsData, validT: validT, classes: 2106)
+                windowPaths.append(path)
+            }
+            return [
+                "multi_window": true,
+                "window_count": ranges.count,
+                "window_ranges": ranges,
+                "window_paths": windowPaths,
+                "valid_T": 0,
+                "logits_f32": FlutterStandardTypedData(bytes: Data()),
+                "crop_preview_png": FlutterStandardTypedData(bytes: previewPNG),
+            ]
+        }
+
+        let (logitsData, validT) = try runSplitRecognizerOnStrip(
+            stripCG: stripCG,
+            orientationFlag: orientationFlag,
+            featModel: featModel,
+            headModel: headModel
+        )
+        return [
+            "multi_window": false,
+            "window_count": 1,
+            "window_ranges": [],
+            "window_paths": [],
+            "valid_T": validT,
+            "logits_f32": FlutterStandardTypedData(bytes: logitsData),
+            "crop_preview_png": FlutterStandardTypedData(bytes: previewPNG),
+        ]
+    }
+
+    private func runSplitRecognizerOnStrip(
+        stripCG: CGImage,
+        orientationFlag: Int,
+        featModel: MLModel,
+        headModel: MLModel
+    ) throws -> (Data, Int) {
+        let validW = max(1, min(512, stripCG.width))
+        let bucketW = Self.recognizerBuckets.first(where: { $0 >= validW }) ?? 512
+        let validT = max(1, (validW + 3) / 4)
+
+        // Render strip into RGBA [64, validW] then replicate-pad right edge to [64, bucketW]
+        let h = 64
+        var rgba = [UInt8](repeating: 255, count: h * validW * 4)
+        let cs = CGColorSpaceCreateDeviceRGB()
+        rgba.withUnsafeMutableBytes { ptr in
+            if let ctx = CGContext(
+                data: ptr.baseAddress,
+                width: validW,
+                height: h,
+                bitsPerComponent: 8,
+                bytesPerRow: validW * 4,
+                space: cs,
+                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+            ) {
+                ctx.interpolationQuality = .high
+                ctx.draw(stripCG, in: CGRect(x: 0, y: 0, width: validW, height: h))
+            }
+        }
+
+        let imgArr = try MLMultiArray(shape: [1, 3, 64, NSNumber(value: bucketW)], dataType: .float32)
+        let dst = imgArr.dataPointer.bindMemory(to: Float.self, capacity: 3 * h * bucketW)
+        let plane = h * bucketW
+        for y in 0..<h {
+            for x in 0..<bucketW {
+                let srcX = min(x, validW - 1) // physical replicate padding
+                let base = (y * validW + srcX) * 4
+                let r = (Float(rgba[base]) / 255.0 - Self.imageNetMean[0]) / Self.imageNetStd[0]
+                let g = (Float(rgba[base + 1]) / 255.0 - Self.imageNetMean[1]) / Self.imageNetStd[1]
+                let b = (Float(rgba[base + 2]) / 255.0 - Self.imageNetMean[2]) / Self.imageNetStd[2]
+                let idx = y * bucketW + x
+                dst[idx] = r
+                dst[plane + idx] = g
+                dst[2 * plane + idx] = b
+            }
+        }
+
+        let oriArr = try MLMultiArray(shape: [1], dataType: .float32)
+        oriArr[0] = NSNumber(value: Float(orientationFlag))
+
+        // Step 1: Feature extractor on full physical bucket canvas
+        let featIn = try MLDictionaryFeatureProvider(dictionary: [
+            "image": MLFeatureValue(multiArray: imgArr),
+            "orientation": MLFeatureValue(multiArray: oriArr),
+        ])
+        let featOut = try featModel.prediction(from: featIn)
+        guard let tempFeats = featOut.featureValue(for: "temporal_features")?.multiArrayValue else {
+            throw Stage4PluginError.inferenceFailure("Missing 'temporal_features' output from feature extractor.")
+        }
+
+        // Step 2: Host slice valid prefix [1, 256, 0..<validT] BEFORE backward LSTM!
+        let tPhys = tempFeats.shape.last?.intValue ?? (bucketW / 4)
+        let sliced = try MLMultiArray(shape: [1, 256, NSNumber(value: validT)], dataType: .float32)
+        let sPtr = sliced.dataPointer.bindMemory(to: Float.self, capacity: 256 * validT)
+        let fPtr = tempFeats.dataPointer.bindMemory(to: Float.self, capacity: 256 * tPhys)
+        for c in 0..<256 {
+            let srcRow = c * tPhys
+            let dstRow = c * validT
+            for t in 0..<validT {
+                sPtr[dstRow + t] = fPtr[srcRow + t]
+            }
+        }
+
+        // Step 3: Recurrent head on exact valid_T prefix -> [valid_T, 1, 2106]
+        let headIn = try MLDictionaryFeatureProvider(dictionary: [
+            "valid_features": MLFeatureValue(multiArray: sliced)
+        ])
+        let headOut = try headModel.prediction(from: headIn)
+        guard let logitsArr = headOut.featureValue(for: "logits")?.multiArrayValue else {
+            throw Stage4PluginError.inferenceFailure("Missing 'logits' output from recurrent head.")
+        }
+        let logitsData = multiArrayToContiguousFloat32Data(logitsArr, count: validT * 2106)
+        return (logitsData, validT)
+    }
+
+    private func rectifyAndScaleToH64(cgImage: CGImage, polygon: [[Double]], orientationFlag: Int) throws -> CGImage {
+        let imgH = Double(cgImage.height)
+        // Compute axis-aligned crop fallback / perspective warp using CoreImage (bottom-left origin)
+        let xs = polygon.map { $0[0] }
+        let ys = polygon.map { $0[1] }
+        let minX = max(0.0, xs.min() ?? 0.0)
+        let maxX = min(Double(cgImage.width), xs.max() ?? Double(cgImage.width))
+        let minY = max(0.0, ys.min() ?? 0.0)
+        let maxY = min(imgH, ys.max() ?? imgH)
+        let cropW = max(2.0, maxX - minX)
+        let cropH = max(2.0, maxY - minY)
+
+        var ci = CIImage(cgImage: cgImage).cropped(
+            to: CGRect(x: minX, y: imgH - maxY, width: cropW, height: cropH)
+        )
+        // Once-only 90° CCW rotation for vertical text lines (matching Python native_strip)
+        if orientationFlag == 1 && cropH > cropW {
+            ci = ci.oriented(.left)
+        }
+        let extent = ci.extent
+        let scale = 64.0 / max(1.0, Double(extent.height))
+        let targetW = max(4, Int((Double(extent.width) * scale).rounded()))
+        let scaled = ci.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
+        guard let outCG = ciContext.createCGImage(
+            scaled,
+            from: CGRect(x: scaled.extent.minX, y: scaled.extent.minY, width: CGFloat(targetW), height: 64)
+        ) else {
+            throw Stage4PluginError.inferenceFailure("Failed to rasterize H64 rectified crop.")
+        }
+        return outCG
+    }
+
+    private func computeWindowRanges(width: Int, maxWidth: Int, overlap: Int) -> [[Int]] {
+        if width <= maxWidth { return [[0, width]] }
+        let step = maxWidth - overlap
+        var out: [[Int]] = []
+        var left = 0
+        while true {
+            let right = min(left + maxWidth, width)
+            out.append([left, right])
+            if right >= width { break }
+            left += step
+            if width - left < maxWidth { left = width - maxWidth }
+        }
+        return out
+    }
+
+    private func argmaxPerFrame(logitsData: Data, validT: Int, classes: Int) -> [Int] {
+        var path: [Int] = []
+        path.reserveCapacity(validT)
+        logitsData.withUnsafeBytes { raw in
+            let ptr = raw.bindMemory(to: Float.self)
+            for t in 0..<validT {
+                let base = t * classes
+                var bestI = 0
+                var bestV = ptr[base]
+                for c in 1..<classes {
+                    let v = ptr[base + c]
+                    if v > bestV { bestV = v; bestI = c }
+                }
+                path.append(bestI)
+            }
+        }
+        return path
+    }
+
+    private func multiArrayToContiguousFloat32Data(_ arr: MLMultiArray, count: Int) -> Data {
+        var out = [Float](repeating: 0, count: count)
+        if arr.dataType == .float32 {
+            let src = arr.dataPointer.bindMemory(to: Float.self, capacity: count)
+            for i in 0..<count { out[i] = src[i] }
+        } else {
+            for i in 0..<count { out[i] = arr[i].floatValue }
+        }
+        return out.withUnsafeBufferPointer { Data(buffer: $0) }
+    }
+}
