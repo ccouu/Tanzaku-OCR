@@ -13,6 +13,7 @@ library;
 
 import 'dart:async';
 import 'dart:convert';
+import 'dart:typed_data';
 
 import 'package:flutter/services.dart';
 
@@ -22,6 +23,23 @@ import '../pipeline/canonical_ctc_decoder.dart';
 import '../pipeline/lexicon_lookup.dart';
 import '../pipeline/obb_postprocess.dart';
 import 'menu_backend.dart';
+
+/// MethodChannel byte views need not start at a four-byte boundary.
+/// Read explicit little-endian IEEE754 bytes, respecting the Uint8List subview.
+Float32List decodeNativeFloat32Bytes(Uint8List bytes) {
+  if (bytes.lengthInBytes % 4 != 0) {
+    throw FormatException(
+      'Float32 payload byte count is not divisible by four',
+    );
+  }
+  final data = ByteData.sublistView(bytes);
+  return Float32List.fromList(
+    List<double>.generate(
+      bytes.lengthInBytes ~/ 4,
+      (i) => data.getFloat32(i * 4, Endian.little),
+    ),
+  );
+}
 
 /// Injectable native Swift bridge interface (implemented by MethodChannel on iOS and mocks in tests).
 abstract class IosCoreMLNativeBridge {
@@ -39,8 +57,9 @@ abstract class IosCoreMLNativeBridge {
 
 class MethodChannelIosCoreMLBridge implements IosCoreMLNativeBridge {
   MethodChannelIosCoreMLBridge({MethodChannel? channel})
-      : _channel = channel ??
-            const MethodChannel('com.menucamera.stage4/coreml_backend');
+    : _channel =
+          channel ??
+          const MethodChannel('com.menucamera.stage4/coreml_backend');
 
   final MethodChannel _channel;
 
@@ -79,7 +98,9 @@ class MethodChannelIosCoreMLBridge implements IosCoreMLNativeBridge {
   }
 
   @override
-  Future<Map<String, TranslationRecord>> lookupSqlTerms(Set<String> terms) async {
+  Future<Map<String, TranslationRecord>> lookupSqlTerms(
+    Set<String> terms,
+  ) async {
     if (terms.isEmpty) return const {};
     final res = await _channel.invokeMapMethod<String, dynamic>(
       'lookupSqlTerms',
@@ -186,7 +207,10 @@ class IosCoreMLBackend implements MenuBackend {
       _idToChar = {for (final e in _charToId!.entries) e.value: e.key};
     }
     if (_lexiconIndex != null) {
-      _lexPipe = LexiconV3Pipeline(_lexiconIndex!, _BridgeTranslationStore(_bridge));
+      _lexPipe = LexiconV3Pipeline(
+        _lexiconIndex!,
+        _BridgeTranslationStore(_bridge),
+      );
     }
   }
 
@@ -226,22 +250,127 @@ class IosCoreMLBackend implements MenuBackend {
     return info;
   }
 
+  /// Detection-only device probe. No recognizer, vocabulary, LM or DB is loaded.
+  Future<Map<String, dynamic>> runDetectorDiagnostic(
+    Uint8List? imageBytes, {
+    required double confidence,
+    bool cpuOnly = false,
+  }) async {
+    final sw = Stopwatch()..start();
+    final report = <String, dynamic>{
+      'schema_version': 1,
+      'test': imageBytes == null ? 'bundled_menu101' : 'current_capture',
+      'expected_reference_boxes': imageBytes == null ? 15 : null,
+      'reference_confidence': 0.35,
+      'effective_confidence': confidence,
+      'cpu_only': cpuOnly,
+      'precision': 'fp32',
+      'status': 'running',
+      'stage': 'native_detector',
+      'decoded_boxes': <Map<String, dynamic>>[],
+      'post_nms_count': 0,
+    };
+    try {
+      if (!confidence.isFinite || confidence < 0 || confidence > 1) {
+        throw ArgumentError('Confidence must be in [0,1]');
+      }
+      final raw =
+          await const MethodChannel('com.menucamera.stage4/coreml_backend')
+              .invokeMapMethod<String, dynamic>('runDetectorDiagnostic', {
+                'image_bytes': ?imageBytes,
+                'cpu_only': cpuOnly,
+              });
+      if (raw == null) throw StateError('Native diagnostic returned no report');
+      final native = Map<String, dynamic>.from((raw['native'] as Map?) ?? {});
+      report['native'] = native;
+      for (final key in ['source_preview_png_b64', 'detector_input_png_b64']) {
+        if (native.containsKey(key)) {
+          report[key] = native.remove(key);
+        }
+      }
+      if (raw['status'] == 'failed') {
+        report['stage'] = native['stage'] ?? raw['stage'];
+        throw StateError(raw['error']?.toString() ?? 'Native detector failed');
+      }
+      report['stage'] = 'dart_decode_nms';
+      final bytes = raw['raw_obb_f32'] as Uint8List;
+      final values = decodeNativeFloat32Bytes(bytes);
+      final n = (raw['num_anchors'] as num).toInt();
+      if (n <= 0 || values.length != 7 * n) {
+        throw FormatException('Invalid detector tensor length');
+      }
+      if (values.any((v) => !v.isFinite)) {
+        throw FormatException('Non-finite detector output');
+      }
+      final lb = raw['letterbox'] as Map;
+      final dets = decodeAndRotatedNmsObb(
+        values,
+        n,
+        ObbLetterboxMeta(
+          gain: (lb['gain'] as num).toDouble(),
+          padX: (lb['pad_x'] as num).toDouble(),
+          padY: (lb['pad_y'] as num).toDouble(),
+          srcWidth: (lb['src_w'] as num).toDouble(),
+          srcHeight: (lb['src_h'] as num).toDouble(),
+        ),
+        confidence: confidence,
+      );
+      report['decoded_boxes'] = dets
+          .map(
+            (d) => {
+              'points': d.points,
+              'confidence': d.confidence,
+              'class_id': d.classId,
+            },
+          )
+          .toList();
+      report['post_nms_count'] = dets.length;
+      if (imageBytes == null && (confidence - 0.35).abs() < 0.0001) {
+        report['reference_count_matches'] = dets.length == 15;
+      }
+      report['raw_payload_bytes'] = bytes.lengthInBytes;
+      report['raw_byte_offset_mod4'] = bytes.offsetInBytes % 4;
+      report['stage'] = 'complete';
+      report['status'] = 'passed';
+      if (dets.isEmpty) {
+        report['warning'] = 'Detector completed but no boxes passed filtering';
+      }
+    } catch (e, st) {
+      report['status'] = 'failed';
+      report['error'] = e.toString();
+      report['stack_trace'] = st.toString();
+    }
+    report['elapsed_ms'] = sw.elapsedMicroseconds / 1000.0;
+    return report;
+  }
+
   Future<void> _ensureTextAssetsLoaded() async {
     if (_charToId == null) {
-      final raw = await _bridge.loadBundledAssetBytes('target_vocab_active.json');
+      final raw = await _bridge.loadBundledAssetBytes(
+        'target_vocab_active.json',
+      );
       final obj = jsonDecode(utf8.decode(raw)) as Map<String, dynamic>;
-      final chars = ((obj['characters'] as List?) ?? const []).map((e) => e.toString()).toList();
+      final chars = ((obj['characters'] as List?) ?? const [])
+          .map((e) => e.toString())
+          .toList();
       _charToId = {for (var i = 0; i < chars.length; i++) chars[i]: i + 1};
       _idToChar = {for (final e in _charToId!.entries) e.value: e.key};
     }
     if (_lm == null) {
-      final raw = await _bridge.loadBundledAssetBytes('char_lm_4g_hp1010_v2.json');
+      final raw = await _bridge.loadBundledAssetBytes(
+        'char_lm_4g_hp1010_v2.json',
+      );
       _lm = CharNGramLMV2.fromJsonString(utf8.decode(raw));
     }
     if (_lexiconIndex == null) {
-      final raw = await _bridge.loadBundledAssetBytes('lexicon_index_v3_22112026.json');
+      final raw = await _bridge.loadBundledAssetBytes(
+        'lexicon_index_v3_22112026.json',
+      );
       _lexiconIndex = LexiconV3Index.fromJsonString(utf8.decode(raw));
-      _lexPipe = LexiconV3Pipeline(_lexiconIndex!, _BridgeTranslationStore(_bridge));
+      _lexPipe = LexiconV3Pipeline(
+        _lexiconIndex!,
+        _BridgeTranslationStore(_bridge),
+      );
     }
   }
 
@@ -261,7 +390,9 @@ class IosCoreMLBackend implements MenuBackend {
       savedHeight: streamHeight,
     );
     if (!parityOk) {
-      throw ArgumentError('Invalid capture stream dimensions ${streamWidth}x$streamHeight');
+      throw ArgumentError(
+        'Invalid capture stream dimensions ${streamWidth}x$streamHeight',
+      );
     }
     _capCounter++;
     final capId = 'ios_cap_$_capCounter';
@@ -277,7 +408,11 @@ class IosCoreMLBackend implements MenuBackend {
       streamSavedParityMode: 'exact',
       imageSha256: 'ios_local_${imageBytes.length}',
     );
-    final cap = _CachedCapture(captureId: capId, imageBytes: imageBytes, meta: meta);
+    final cap = _CachedCapture(
+      captureId: capId,
+      imageBytes: imageBytes,
+      meta: meta,
+    );
     if (_captures.length >= 4) {
       _captures.remove(_captures.keys.first);
     }
@@ -346,7 +481,9 @@ class IosCoreMLBackend implements MenuBackend {
     _runs[runId] = initial;
 
     // Serialize execution strictly (max 1 in-flight model run)
-    _serialChain = _serialChain.then((_) => _executeRun(runId, cap, settings, isReprocess, reqSw));
+    _serialChain = _serialChain.then(
+      (_) => _executeRun(runId, cap, settings, isReprocess, reqSw),
+    );
     return initial;
   }
 
@@ -358,7 +495,15 @@ class IosCoreMLBackend implements MenuBackend {
     Stopwatch reqSw,
   ) async {
     if (_cancelledRunIds.contains(runId)) {
-      _runs[runId] = _markCancelled(runId, cap, settings, isReprocess, reqSw, 0.0, 'cancelled_before_start');
+      _runs[runId] = _markCancelled(
+        runId,
+        cap,
+        settings,
+        isReprocess,
+        reqSw,
+        0.0,
+        'cancelled_before_start',
+      );
       return;
     }
 
@@ -379,7 +524,9 @@ class IosCoreMLBackend implements MenuBackend {
 
       final cachedOcr = cap.ocrCacheByConf[ck];
       final canReuseLogits = cachedOcr != null;
-      final cacheStatus = canReuseLogits ? 'reused_cached_logits' : 'fresh_full_inference';
+      final cacheStatus = canReuseLogits
+          ? 'reused_cached_logits'
+          : 'fresh_full_inference';
 
       List<_CachedCropOcr> cropOcrList;
       int rawDetCount;
@@ -392,13 +539,21 @@ class IosCoreMLBackend implements MenuBackend {
         final detRaw = await _bridge.runDetectorOBB1024(cap.imageBytes);
         detectMs = dSw.elapsedMicroseconds / 1000.0;
         if (_cancelledRunIds.contains(runId)) {
-          _runs[runId] = _markCancelled(runId, cap, settings, isReprocess, reqSw, pipeSw.elapsedMicroseconds / 1000.0, 'cancelled');
+          _runs[runId] = _markCancelled(
+            runId,
+            cap,
+            settings,
+            isReprocess,
+            reqSw,
+            pipeSw.elapsedMicroseconds / 1000.0,
+            'cancelled',
+          );
           return;
         }
 
         final pSw = Stopwatch()..start();
         final rawBytes = detRaw['raw_obb_f32'] as Uint8List;
-        final rawFloats = rawBytes.buffer.asFloat32List(rawBytes.offsetInBytes, rawBytes.lengthInBytes ~/ 4);
+        final rawFloats = decodeNativeFloat32Bytes(rawBytes);
         final numAnchors = (detRaw['num_anchors'] as num).toInt();
         final lb = detRaw['letterbox'] as Map;
         final lbMeta = ObbLetterboxMeta(
@@ -421,7 +576,15 @@ class IosCoreMLBackend implements MenuBackend {
         cropOcrList = [];
         for (final d in dets) {
           if (_cancelledRunIds.contains(runId)) {
-            _runs[runId] = _markCancelled(runId, cap, settings, isReprocess, reqSw, pipeSw.elapsedMicroseconds / 1000.0, 'cancelled');
+            _runs[runId] = _markCancelled(
+              runId,
+              cap,
+              settings,
+              isReprocess,
+              reqSw,
+              pipeSw.elapsedMicroseconds / 1000.0,
+              'cancelled',
+            );
             return;
           }
           final rSw = Stopwatch()..start();
@@ -446,34 +609,41 @@ class IosCoreMLBackend implements MenuBackend {
             final paths = ((recOut['window_paths'] as List?) ?? const [])
                 .map((p) => (p as List).map((v) => (v as num).toInt()).toList())
                 .toList();
-            cropOcrList.add(_CachedCropOcr(
-              detection: d,
-              multiWindow: true,
-              windowCount: winCount,
-              windowRanges: ranges,
-              windowPaths: paths,
-              logpTC: null,
-              previewPngB64: previewB64,
-            ));
+            cropOcrList.add(
+              _CachedCropOcr(
+                detection: d,
+                multiWindow: true,
+                windowCount: winCount,
+                windowRanges: ranges,
+                windowPaths: paths,
+                logpTC: null,
+                previewPngB64: previewB64,
+              ),
+            );
           } else {
             final validT = (recOut['valid_T'] as num).toInt();
             final lbBytes = recOut['logits_f32'] as Uint8List;
-            final floats = lbBytes.buffer.asFloat32List(lbBytes.offsetInBytes, lbBytes.lengthInBytes ~/ 4);
+            final floats = decodeNativeFloat32Bytes(lbBytes);
             final classes = validT > 0 ? floats.length ~/ validT : 2106;
             final rawTC = List<List<double>>.generate(
               validT,
-              (t) => List<double>.generate(classes, (c) => floats[t * classes + c]),
+              (t) => List<double>.generate(
+                classes,
+                (c) => floats[t * classes + c],
+              ),
             );
             final logpTC = foldParenthesisAndLogSoftmax(rawTC, charToId);
-            cropOcrList.add(_CachedCropOcr(
-              detection: d,
-              multiWindow: false,
-              windowCount: 1,
-              windowRanges: const [],
-              windowPaths: const [],
-              logpTC: logpTC,
-              previewPngB64: previewB64,
-            ));
+            cropOcrList.add(
+              _CachedCropOcr(
+                detection: d,
+                multiWindow: false,
+                windowCount: 1,
+                windowRanges: const [],
+                windowPaths: const [],
+                logpTC: logpTC,
+                previewPngB64: previewB64,
+              ),
+            );
           }
         }
         if (!_cancelledRunIds.contains(runId)) {
@@ -490,7 +660,15 @@ class IosCoreMLBackend implements MenuBackend {
 
       for (var i = 0; i < cropOcrList.length; i++) {
         if (_cancelledRunIds.contains(runId)) {
-          _runs[runId] = _markCancelled(runId, cap, settings, isReprocess, reqSw, pipeSw.elapsedMicroseconds / 1000.0, 'cancelled');
+          _runs[runId] = _markCancelled(
+            runId,
+            cap,
+            settings,
+            isReprocess,
+            reqSw,
+            pipeSw.elapsedMicroseconds / 1000.0,
+            'cancelled',
+          );
           return;
         }
         final item = cropOcrList[i];
@@ -502,7 +680,10 @@ class IosCoreMLBackend implements MenuBackend {
           String routeUsed;
           bool numDisagree;
           if (item.multiWindow) {
-            final mergedIds = mergeOwnedWindowTokens(item.windowPaths, item.windowRanges);
+            final mergedIds = mergeOwnedWindowTokens(
+              item.windowPaths,
+              item.windowRanges,
+            );
             final rawMerged = mergedIds.map((id) => idToChar[id] ?? '').join();
             greedyTxt = canonicalizeOcrText(rawMerged);
             decodedTxt = greedyTxt;
@@ -527,42 +708,46 @@ class IosCoreMLBackend implements MenuBackend {
           final tr = await lexPipe.lookupAndFormat(decodedTxt);
           lookMs += lkSw.elapsedMicroseconds / 1000.0;
 
-          cropsOut.add(CropResult(
-            cropId: 'crop_${i + 1}',
-            cropIndex: i + 1,
-            status: 'completed',
-            confidence: item.detection.confidence,
-            orientation: item.detection.orientationLabel,
-            polygon: item.detection.points,
-            windowCount: item.windowCount,
-            multiWindowFallback: item.multiWindow,
-            cropPreviewPngB64: item.previewPngB64,
-            greedyOcr: greedyTxt,
-            decodedOcr: decodedTxt,
-            decoderRoute: routeUsed,
-            numericDisagreement: numDisagree,
-            translation: tr,
-            error: null,
-          ));
+          cropsOut.add(
+            CropResult(
+              cropId: 'crop_${i + 1}',
+              cropIndex: i + 1,
+              status: 'completed',
+              confidence: item.detection.confidence,
+              orientation: item.detection.orientationLabel,
+              polygon: item.detection.points,
+              windowCount: item.windowCount,
+              multiWindowFallback: item.multiWindow,
+              cropPreviewPngB64: item.previewPngB64,
+              greedyOcr: greedyTxt,
+              decodedOcr: decodedTxt,
+              decoderRoute: routeUsed,
+              numericDisagreement: numDisagree,
+              translation: tr,
+              error: null,
+            ),
+          );
           completed++;
         } catch (e) {
-          cropsOut.add(CropResult(
-            cropId: 'crop_${i + 1}',
-            cropIndex: i + 1,
-            status: 'failed',
-            confidence: item.detection.confidence,
-            orientation: item.detection.orientationLabel,
-            polygon: item.detection.points,
-            windowCount: item.windowCount,
-            multiWindowFallback: item.multiWindow,
-            cropPreviewPngB64: null,
-            greedyOcr: '',
-            decodedOcr: '',
-            decoderRoute: 'failed',
-            numericDisagreement: false,
-            translation: null,
-            error: e.toString(),
-          ));
+          cropsOut.add(
+            CropResult(
+              cropId: 'crop_${i + 1}',
+              cropIndex: i + 1,
+              status: 'failed',
+              confidence: item.detection.confidence,
+              orientation: item.detection.orientationLabel,
+              polygon: item.detection.points,
+              windowCount: item.windowCount,
+              multiWindowFallback: item.multiWindow,
+              cropPreviewPngB64: null,
+              greedyOcr: '',
+              decodedOcr: '',
+              decoderRoute: 'failed',
+              numericDisagreement: false,
+              translation: null,
+              error: e.toString(),
+            ),
+          );
           failed++;
         }
         firstResultMs ??= reqSw.elapsedMicroseconds / 1000.0;
@@ -597,11 +782,15 @@ class IosCoreMLBackend implements MenuBackend {
           recognizeMs: double.parse(recMs.toStringAsFixed(2)),
           decodeMs: double.parse(decMs.toStringAsFixed(2)),
           lookupMs: double.parse(lookMs.toStringAsFixed(2)),
-          firstResultMs: firstResultMs != null ? double.parse(firstResultMs.toStringAsFixed(2)) : null,
+          firstResultMs: firstResultMs != null
+              ? double.parse(firstResultMs.toStringAsFixed(2))
+              : null,
           serverPipelineWallMs: double.parse(pipeTotMs.toStringAsFixed(2)),
           serverRequestTotalMs: double.parse(reqTotMs.toStringAsFixed(2)),
           totalWallMs: double.parse(reqTotMs.toStringAsFixed(2)),
-          summedCropWorkMs: double.parse((recMs + decMs + lookMs).toStringAsFixed(2)),
+          summedCropWorkMs: double.parse(
+            (recMs + decMs + lookMs).toStringAsFixed(2),
+          ),
         ),
         crops: cropsOut,
       );

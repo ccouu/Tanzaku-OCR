@@ -257,6 +257,8 @@ jobs:
           gunzip -c data/processed/lexicon/lexicon_index_v3_22112026.json.gz > "$STAGE_RES/lexicon_index_v3_22112026.json"
           cp data/processed/lexicon/lexicon_index_v3_22112026.json.gz "$STAGE_RES/"
           cp data/processed/lexicon/culinary_menu.db "$STAGE_RES/"
+          # Known detector reference, delivered inside the approved reference bundle.
+          cp data/raw/gemini_banana_mobile_menus_50/menu-101.jpg "$STAGE_RES/menu-101.jpg"
           ls -lh "$STAGE_RES"
 
       - name: Set up pinned Flutter 3.50.1
@@ -283,7 +285,7 @@ jobs:
           ditto "$RUNNER_TEMP/Stage4Bundle" "$OUT/Payload/Runner.app/Stage4Bundle"
 
           # Verify compiled .mlmodelc + vocab/LM/lexicon/DB are actually inside Runner.app/Stage4Bundle
-          for req in V5DetectorOBB1024_fp32.mlmodelc RecognizerFeatureExtractor_fp32.mlmodelc RecognizerRecurrentHead_fp32.mlmodelc target_vocab_active.json char_lm_4g_hp1010_v2.json lexicon_index_v3_22112026.json culinary_menu.db; do
+          for req in V5DetectorOBB1024_fp32.mlmodelc RecognizerFeatureExtractor_fp32.mlmodelc RecognizerRecurrentHead_fp32.mlmodelc target_vocab_active.json char_lm_4g_hp1010_v2.json lexicon_index_v3_22112026.json culinary_menu.db menu-101.jpg; do
             test -e "$OUT/Payload/Runner.app/Stage4Bundle/$req"
           done
 

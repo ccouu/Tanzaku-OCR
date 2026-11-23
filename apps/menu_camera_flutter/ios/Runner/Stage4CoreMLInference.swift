@@ -20,6 +20,8 @@ final class Stage4CoreMLInference {
     static let imageNetStd: [Float] = [0.229, 0.224, 0.225]
 
     private var detectorModel: MLModel?
+    private var detectorCPUOnly = false
+    private(set) var lastDetectorDiagnostics: [String: Any] = [:]
     private var featExtractorModel: MLModel?
     private var recurrentHeadModel: MLModel?
     private let ciContext = CIContext(options: [.useSoftwareRenderer: false])
@@ -48,6 +50,17 @@ final class Stage4CoreMLInference {
         return required.filter { bundledResourceURL($0) == nil }
     }
 
+    private func loadDetectorIfNeeded(cpuOnly: Bool = false) throws {
+        if detectorModel != nil && detectorCPUOnly == cpuOnly { return }
+        guard let url = bundledResourceURL("V5DetectorOBB1024_fp32.mlmodelc") else {
+            throw Stage4PluginError.assetsNotBundled(missing: ["V5DetectorOBB1024_fp32.mlmodelc"])
+        }
+        let config = MLModelConfiguration()
+        config.computeUnits = cpuOnly ? .cpuOnly : .all
+        detectorModel = try MLModel(contentsOf: url, configuration: config)
+        detectorCPUOnly = cpuOnly
+    }
+
     func loadModelsIfNeeded() throws {
         if modelsLoaded { return }
         let missing = missingRequiredResources()
@@ -57,24 +70,31 @@ final class Stage4CoreMLInference {
         let cfg = MLModelConfiguration()
         cfg.computeUnits = .all
 
-        guard let detURL = bundledResourceURL("V5DetectorOBB1024_fp32.mlmodelc"),
-              let featURL = bundledResourceURL("RecognizerFeatureExtractor_fp32.mlmodelc"),
+        guard let featURL = bundledResourceURL("RecognizerFeatureExtractor_fp32.mlmodelc"),
               let headURL = bundledResourceURL("RecognizerRecurrentHead_fp32.mlmodelc") else {
             throw Stage4PluginError.assetsNotBundled(missing: missingRequiredResources())
         }
-        detectorModel = try MLModel(contentsOf: detURL, configuration: cfg)
+        try loadDetectorIfNeeded()
         featExtractorModel = try MLModel(contentsOf: featURL, configuration: cfg)
         recurrentHeadModel = try MLModel(contentsOf: headURL, configuration: cfg)
         modelsLoaded = true
     }
 
     /// Letterbox RGB image to 1024x1024 (pad 114/255) and run V5 YOLO11n-OBB Core ML model.
-    func runDetectorOBB1024(image: UIImage) throws -> (rawFloatBytes: Data, numAnchors: Int, meta: [String: Double]) {
-        try loadModelsIfNeeded()
+    func runDetectorOBB1024(image: UIImage, cpuOnly: Bool = false, captureDiagnostics: Bool = false) throws -> (rawFloatBytes: Data, numAnchors: Int, meta: [String: Double]) {
+        let start = ProcessInfo.processInfo.systemUptime
+        lastDetectorDiagnostics = ["stage": "load_detector", "precision": "fp32", "compute_units": cpuOnly ? "cpuOnly" : "all", "ui_image_orientation": image.imageOrientation.rawValue]
+        try loadDetectorIfNeeded(cpuOnly: cpuOnly)
+        lastDetectorDiagnostics["model_load_ms"] = (ProcessInfo.processInfo.systemUptime - start) * 1000
+        lastDetectorDiagnostics["stage"] = "prepare_image"
         guard let model = detectorModel, let cg = image.cgImage else {
             throw Stage4PluginError.inferenceFailure("Detector model or CGImage unavailable.")
         }
 
+        lastDetectorDiagnostics["source_width"] = cg.width
+        lastDetectorDiagnostics["source_height"] = cg.height
+        lastDetectorDiagnostics["input_shape"] = [1, 3, 1024, 1024]
+        if captureDiagnostics { lastDetectorDiagnostics["source_preview_png_b64"] = image.pngData()?.base64EncodedString() ?? "" }
         let srcW = Double(cg.width)
         let srcH = Double(cg.height)
         let target = Double(Self.detectorImgSz)
@@ -115,14 +135,75 @@ final class Stage4CoreMLInference {
             dst[2 * plane + p] = Float(rgba[base + 2]) / 255.0
         }
 
+        if captureDiagnostics {
+            let provider = CGDataProvider(data: Data(rgba) as CFData)
+            if let provider = provider, let preview = CGImage(width: sz, height: sz, bitsPerComponent: 8, bitsPerPixel: 32, bytesPerRow: sz * 4, space: colorSpace, bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedLast.rawValue), provider: provider, decode: nil, shouldInterpolate: false, intent: .defaultIntent) {
+                lastDetectorDiagnostics["detector_input_png_b64"] = UIImage(cgImage: preview).pngData()?.base64EncodedString() ?? ""
+            }
+        }
+        lastDetectorDiagnostics["model_resource"] = "V5DetectorOBB1024_fp32.mlmodelc"
+        lastDetectorDiagnostics["app_version"] = Bundle.main.infoDictionary?["CFBundleShortVersionString"] ?? "unknown"
+        lastDetectorDiagnostics["build_number"] = Bundle.main.infoDictionary?["CFBundleVersion"] ?? "unknown"
+        lastDetectorDiagnostics["os_version"] = UIDevice.current.systemVersion
+        lastDetectorDiagnostics["device"] = UIDevice.current.model
+        lastDetectorDiagnostics["input_expected_range"] = [0.0, 1.0]
+        if captureDiagnostics {
+            var sums = [Double](repeating: 0, count: 3)
+            var lo: Float = 1
+            var hi: Float = 0
+            for c in 0..<3 {
+                for i in 0..<plane {
+                    let v = dst[c * plane + i]
+                    sums[c] += Double(v)
+                    lo = min(lo, v)
+                    hi = max(hi, v)
+                }
+            }
+            lastDetectorDiagnostics["input_actual_min_max"] = [Double(lo), Double(hi)]
+            lastDetectorDiagnostics["input_channel_means_rgb"] = sums.map { $0 / Double(plane) }
+        }
+        lastDetectorDiagnostics["letterbox"] = ["gain": gain, "pad_x": Double(left), "pad_y": Double(top)]
+        lastDetectorDiagnostics["stage"] = "coreml_predict"
+        let predictStart = ProcessInfo.processInfo.systemUptime
         let provider = try MLDictionaryFeatureProvider(dictionary: ["image_rgb01": MLFeatureValue(multiArray: inputArr)])
         let out = try model.prediction(from: provider)
         guard let rawArr = out.featureValue(for: "raw_obb")?.multiArrayValue else {
             throw Stage4PluginError.inferenceFailure("Detector output 'raw_obb' missing.")
         }
-        let numAnchors = rawArr.shape.last?.intValue ?? 21504
+        lastDetectorDiagnostics["predict_ms"] = (ProcessInfo.processInfo.systemUptime - predictStart) * 1000
+        lastDetectorDiagnostics["stage"] = "read_output"
+        let shape = rawArr.shape.map { $0.intValue }
+        lastDetectorDiagnostics["output_shape"] = shape
+        lastDetectorDiagnostics["output_strides"] = rawArr.strides.map { $0.intValue }
+        lastDetectorDiagnostics["output_dtype"] = String(describing: rawArr.dataType)
+        guard shape.count == 3, shape[0] == 1, shape[1] == 7, shape[2] > 0 else {
+            throw Stage4PluginError.inferenceFailure("Unexpected detector output shape: \(shape)")
+        }
+        let numAnchors = shape[2]
         let count = 7 * numAnchors
         let floatData = multiArrayToContiguousFloat32Data(rawArr, count: count)
+        floatData.withUnsafeBytes { bytes in
+            let values = bytes.bindMemory(to: Float.self)
+            var finiteCount = 0
+            var maxConfidence: Float = 0
+            var above = [0, 0, 0]
+            for value in values { if value.isFinite { finiteCount += 1 } }
+            for i in 0..<numAnchors {
+                let conf = max(values[4 * numAnchors + i], values[5 * numAnchors + i])
+                if conf.isFinite {
+                    maxConfidence = max(maxConfidence, conf)
+                    if conf >= 0.05 { above[0] += 1 }
+                    if conf >= 0.15 { above[1] += 1 }
+                    if conf >= 0.35 { above[2] += 1 }
+                }
+            }
+            lastDetectorDiagnostics["finite_output_values"] = finiteCount
+            lastDetectorDiagnostics["nonfinite_output_values"] = count - finiteCount
+            lastDetectorDiagnostics["max_class_confidence"] = Double(maxConfidence)
+            lastDetectorDiagnostics["candidates_ge_005_015_035"] = above
+        }
+        lastDetectorDiagnostics["stage"] = "detector_complete"
+        lastDetectorDiagnostics["detector_total_ms"] = (ProcessInfo.processInfo.systemUptime - start) * 1000
         return (
             floatData,
             numAnchors,
@@ -253,15 +334,15 @@ final class Stage4CoreMLInference {
         }
 
         // Step 2: Host slice valid prefix [1, 256, 0..<validT] BEFORE backward LSTM!
-        let tPhys = tempFeats.shape.last?.intValue ?? (bucketW / 4)
+        guard tempFeats.shape.count == 3, tempFeats.shape[1].intValue == 256, tempFeats.shape[2].intValue >= validT else {
+            throw Stage4PluginError.inferenceFailure("Invalid temporal feature shape \(tempFeats.shape) for validT=\(validT)")
+        }
         let sliced = try MLMultiArray(shape: [1, 256, NSNumber(value: validT)], dataType: .float32)
         let sPtr = sliced.dataPointer.bindMemory(to: Float.self, capacity: 256 * validT)
-        let fPtr = tempFeats.dataPointer.bindMemory(to: Float.self, capacity: 256 * tPhys)
         for c in 0..<256 {
-            let srcRow = c * tPhys
             let dstRow = c * validT
             for t in 0..<validT {
-                sPtr[dstRow + t] = fPtr[srcRow + t]
+                sPtr[dstRow + t] = tempFeats[[NSNumber(value: 0), NSNumber(value: c), NSNumber(value: t)]].floatValue
             }
         }
 
@@ -344,12 +425,24 @@ final class Stage4CoreMLInference {
     }
 
     private func multiArrayToContiguousFloat32Data(_ arr: MLMultiArray, count: Int) -> Data {
+        let shape = arr.shape.map { $0.intValue }
+        let strides = arr.strides.map { $0.intValue }
+        precondition(count == shape.reduce(1, *), "Unexpected Core ML logical element count")
         var out = [Float](repeating: 0, count: count)
-        if arr.dataType == .float32 {
-            let src = arr.dataPointer.bindMemory(to: Float.self, capacity: count)
-            for i in 0..<count { out[i] = src[i] }
-        } else {
-            for i in 0..<count { out[i] = arr[i].floatValue }
+        for linear in 0..<count {
+            var remaining = linear
+            var coordinates = [Int](repeating: 0, count: shape.count)
+            var offset = 0
+            for axis in stride(from: shape.count - 1, through: 0, by: -1) {
+                coordinates[axis] = remaining % shape[axis]
+                remaining /= shape[axis]
+                offset += coordinates[axis] * strides[axis]
+            }
+            if arr.dataType == .float32 {
+                out[linear] = arr.dataPointer.assumingMemoryBound(to: Float.self)[offset]
+            } else {
+                out[linear] = arr[coordinates.map { NSNumber(value: $0) }].floatValue
+            }
         }
         return out.withUnsafeBufferPointer { Data(buffer: $0) }
     }

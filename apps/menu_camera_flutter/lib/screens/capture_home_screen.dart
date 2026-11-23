@@ -21,6 +21,7 @@ import '../services/settings_store.dart';
 import '../services/webcam_capture.dart';
 import '../widgets/crop_popup.dart';
 import '../widgets/settings_sheet.dart';
+import 'detector_diagnostic_screen.dart';
 
 class CaptureHomeScreen extends StatefulWidget {
   const CaptureHomeScreen({
@@ -64,6 +65,9 @@ class _CaptureHomeScreenState extends State<CaptureHomeScreen> {
   @override
   void initState() {
     super.initState();
+    _backendBanner = widget.backend is IosCoreMLBackend
+        ? 'Initializing iOS On-Device Core ML backend...'
+        : 'Connecting to local Python reference backend...';
     _webcam = widget.webcamController ?? createWebcamController();
     _bootstrap();
   }
@@ -76,9 +80,12 @@ class _CaptureHomeScreenState extends State<CaptureHomeScreen> {
     try {
       await widget.backend.initialize();
       if (!mounted) return;
+      final isIosNative = widget.backend is IosCoreMLBackend;
+      final platformLabel = isIosNative
+          ? 'iOS On-Device Core ML'
+          : (kIsWeb ? 'Flutter Web Desktop Demo' : 'Flutter Desktop Demo');
       setState(() {
-        _backendBanner =
-            '${kIsWeb ? "Flutter Web Desktop Demo" : "Flutter Desktop Demo"} • ${widget.backend.backendLabel}';
+        _backendBanner = '$platformLabel • ${widget.backend.backendLabel}';
       });
     } catch (e) {
       if (!mounted) return;
@@ -383,11 +390,25 @@ class _CaptureHomeScreenState extends State<CaptureHomeScreen> {
     );
   }
 
+  void _openDiagnostics() {
+    final backend = widget.backend;
+    if (backend is! IosCoreMLBackend) return;
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => DetectorDiagnosticScreen(
+          backend: backend,
+          capturedImageBytes: _stillImageBytes,
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final inResultView = _stillImageBytes != null;
     final settingsChanged =
         inResultView && _runSettings != null && _runSettings != _settings;
+    final isIosBackend = widget.backend is IosCoreMLBackend;
 
     return Scaffold(
       appBar: AppBar(
@@ -404,6 +425,13 @@ class _CaptureHomeScreenState extends State<CaptureHomeScreen> {
                 icon: const Icon(Icons.refresh, size: 18),
                 label: const Text('Reprocess'),
               ),
+            ),
+          if (isIosBackend)
+            IconButton(
+              key: const Key('diagnostics_btn'),
+              icon: const Icon(Icons.bug_report_outlined),
+              tooltip: 'Detector Diagnostics',
+              onPressed: _openDiagnostics,
             ),
           IconButton(
             key: const Key('settings_btn'),
@@ -532,6 +560,21 @@ class _CaptureHomeScreenState extends State<CaptureHomeScreen> {
     return Column(
       children: [
         _buildTimingHeader(run),
+        if (run != null && run.status == 'failed')
+          Container(
+            key: const Key('run_failed_error_banner'),
+            width: double.infinity,
+            color: const Color(0xFF991B1B),
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+            child: SelectableText(
+              'Run failed (stage: ${run.stage}): ${run.error ?? "Unknown error"}',
+              style: const TextStyle(
+                color: Colors.white,
+                fontWeight: FontWeight.w600,
+                fontSize: 13,
+              ),
+            ),
+          ),
         Expanded(
           child: LayoutBuilder(
             builder: (context, constraints) {

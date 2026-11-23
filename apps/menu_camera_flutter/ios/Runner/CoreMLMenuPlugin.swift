@@ -119,6 +119,38 @@ public final class CoreMLMenuPlugin: NSObject, FlutterPlugin {
                 }
             }
 
+        case "runDetectorDiagnostic":
+            let args = call.arguments as? [String: Any] ?? [:]
+            let typed = args["image_bytes"] as? FlutterStandardTypedData
+            let cpuOnly = args["cpu_only"] as? Bool ?? false
+            inferenceQueue.async { [weak self] in
+                guard let self = self else { return }
+                do {
+                    let imageData: Data
+                    if let typed = typed {
+                        imageData = typed.data
+                    } else if let url = self.inference.bundledResourceURL("menu-101.jpg") {
+                        imageData = try Data(contentsOf: url)
+                    } else {
+                        throw Stage4PluginError.assetsNotBundled(missing: ["menu-101.jpg"])
+                    }
+                    guard let image = UIImage(data: imageData) else {
+                        throw Stage4PluginError.invalidArguments("Cannot decode diagnostic source image")
+                    }
+                    let (bytes, anchors, meta) = try self.inference.runDetectorOBB1024(image: image, cpuOnly: cpuOnly, captureDiagnostics: true)
+                    let report: [String: Any] = [
+                        "status": "passed", "stage": "native_detector_complete",
+                        "native": self.inference.lastDetectorDiagnostics,
+                        "raw_obb_f32": FlutterStandardTypedData(bytes: bytes),
+                        "num_anchors": anchors, "letterbox": meta,
+                    ]
+                    DispatchQueue.main.async { result(report) }
+                } catch {
+                    let report: [String: Any] = ["status": "failed", "stage": "native_detector_error", "error": String(describing: error), "native": self.inference.lastDetectorDiagnostics]
+                    DispatchQueue.main.async { result(report) }
+                }
+            }
+
         case "runDetectorOBB1024":
             guard let args = call.arguments as? [String: Any],
                   let typed = args["image_bytes"] as? FlutterStandardTypedData,
