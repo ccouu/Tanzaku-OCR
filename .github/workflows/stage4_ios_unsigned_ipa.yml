@@ -182,11 +182,22 @@ jobs:
           MLPKG_SHA: ${{ inputs.mlpackages_bundle_sha256 }}
           REF_URL: ${{ inputs.reference_validation_bundle_url }}
           REF_SHA: ${{ inputs.reference_validation_bundle_sha256 }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
+          # Draft release assets are authenticated only on this repository's API.
+          # Never send the job token to arbitrary user-supplied URLs.
+          download_bundle() {
+            case "$1" in
+              https://api.github.com/repos/ccouu/Tanzaku-OCR/releases/assets/*)
+                curl -fsSL -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/octet-stream" "$1" -o "$2" ;;
+              https://*) curl -fsSL "$1" -o "$2" ;;
+              *) echo "Only HTTPS bundle URLs are supported" >&2; return 1 ;;
+            esac
+          }
           mkdir -p outputs/stage4/coreml_export_iphone_20261123/mlpackages
 
-          curl -fsSL "$MLPKG_URL" -o "$RUNNER_TEMP/coreml_mlpackages_bundle.tar.gz"
+          download_bundle "$MLPKG_URL" "$RUNNER_TEMP/coreml_mlpackages_bundle.tar.gz"
           ACTUAL_MLPKG_SHA="$(shasum -a 256 "$RUNNER_TEMP/coreml_mlpackages_bundle.tar.gz" | awk '{print $1}')"
           if [ "$ACTUAL_MLPKG_SHA" != "$MLPKG_SHA" ]; then
             echo "mlpackages SHA-256 mismatch: expected $MLPKG_SHA, got $ACTUAL_MLPKG_SHA" >&2
@@ -195,7 +206,7 @@ jobs:
           tar -xzf "$RUNNER_TEMP/coreml_mlpackages_bundle.tar.gz" \
             -C outputs/stage4/coreml_export_iphone_20261123/mlpackages
 
-          curl -fsSL "$REF_URL" -o "$RUNNER_TEMP/stage4_reference_validation_bundle.tar.gz"
+          download_bundle "$REF_URL" "$RUNNER_TEMP/stage4_reference_validation_bundle.tar.gz"
           ACTUAL_REF_SHA="$(shasum -a 256 "$RUNNER_TEMP/stage4_reference_validation_bundle.tar.gz" | awk '{print $1}')"
           if [ "$ACTUAL_REF_SHA" != "$REF_SHA" ]; then
             echo "reference validation bundle SHA-256 mismatch: expected $REF_SHA, got $ACTUAL_REF_SHA" >&2
